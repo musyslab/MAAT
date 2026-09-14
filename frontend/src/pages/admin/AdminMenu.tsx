@@ -6,6 +6,7 @@ import {
     FaChartLine,
     FaChevronRight,
     FaListUl,
+    FaEye,
     FaUpload,
     FaUsers,
 } from "react-icons/fa";
@@ -70,6 +71,7 @@ export default function AdminMenu() {
     const analyticsPath = `/admin/school/${schoolId}/class/${classId}/analytics`;
     const adminUploadPath = `/admin/school/${schoolId}/class/${classId}/upload`;
     const officeHoursPath = `/admin/school/${schoolId}/class/${classId}/office-hours`;
+    const studentPreviewPath = `/admin/school/${schoolId}/class/${classId}/student-preview`;
 
     const menuOptions: AdminMenuOption[] = [
         {
@@ -87,11 +89,11 @@ export default function AdminMenu() {
             actionLabel: "Open Analytics",
         },
         {
-            title: "Admin Upload",
-            description: "Upload and manage admin files for this class",
-            to: adminUploadPath,
-            icon: <FaUpload aria-hidden="true" />,
-            actionLabel: "Open Admin Upload",
+            title: "Student View Preview",
+            description: "Preview the student-facing class experience without submitting work",
+            to: studentPreviewPath,
+            icon: <FaEye aria-hidden="true" />,
+            actionLabel: "Preview Student View",
         },
         {
             title: "Office Hours",
@@ -99,6 +101,13 @@ export default function AdminMenu() {
             to: officeHoursPath,
             icon: <FaUsers aria-hidden="true" />,
             actionLabel: "Open Office Hours",
+        },
+        {
+            title: "Admin Upload",
+            description: "Upload and manage admin files for this class",
+            to: adminUploadPath,
+            icon: <FaUpload aria-hidden="true" />,
+            actionLabel: "Open Admin Upload",
         },
     ];
 

@@ -15,6 +15,28 @@
     box-shadow: 0 18px 40px rgba(20, 35, 60, 0.08);
 }
 
+/* Admin student preview banner */
+.module-details-message[role="status"] {
+    box-sizing: border-box;
+    width: 95%;
+    min-height: 54px;
+    margin: 18px auto 0;
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #bfdbfe;
+    border-radius: 18px;
+    background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 34%),
+        linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
+    color: #1e3a8a;
+    font-weight: 850;
+    line-height: 1.45;
+    text-align: center;
+    box-shadow: 0 12px 28px rgba(30, 64, 175, 0.1);
+}
+
 .module-details-message.is-error {
     border-color: #fecaca;
     background: #fff7f7;
@@ -354,6 +376,11 @@
 }
 
 @media (max-width: 560px) {
+    .module-details-message[role="status"] {
+        padding: 12px 14px;
+        border-radius: 16px;
+    }
+
     .module-office-hours-card {
         grid-template-columns: 1fr;
     }

@@ -10,7 +10,7 @@ import {
 } from "react";
 import axios from "axios";
 import { Helmet } from "react-helmet";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
     FaArrowRight,
     FaBolt,
@@ -132,10 +132,13 @@ export default function StudentModuleDetails() {
     }>();
 
     const navigate = useNavigate();
+    const location = useLocation();
 
     const schoolId = school_id || "";
     const classId = class_id || "";
     const moduleId = Number(module_id || 0);
+    const isAdminPreview = location.pathname.includes("/student-preview");
+    const adminPreviewBasePath = `/admin/school/${schoolId}/class/${classId}/student-preview`;
 
     const [className, setClassName] = useState("");
     const [module, setModule] = useState<ModuleObject | null>(null);
@@ -553,7 +556,7 @@ export default function StudentModuleDetails() {
                     headers: authHeader(),
                     params: {
                         ...(schoolId ? { school_id: schoolId } : {}),
-                        role_context: "student",
+                        role_context: isAdminPreview ? "admin" : "student",
                     },
                 },
             )
@@ -595,9 +598,36 @@ export default function StudentModuleDetails() {
                     return;
                 }
 
-                setModule(selectedModule);
-                setCheckpoints(res.data?.checkpoints || []);
-                setIncentives(res.data?.incentives || null);
+                if (isAdminPreview) {
+                    setModule({
+                        ...selectedModule,
+                        MainCompleted: false,
+                        MainRewarded: false,
+                        MainRewardStars: 0,
+                        MainRewardMultiplier: 1,
+                        MainStartedEarly: false,
+                    });
+                    setCheckpoints(
+                        (res.data?.checkpoints || []).map((checkpoint: Checkpoint) => ({
+                            ...checkpoint,
+                            solved: false,
+                            rewarded: false,
+                            skipped: false,
+                            rewardStars: 0,
+                            rewardMultiplier: 1,
+                            startedEarly: false,
+                        })),
+                    );
+                    setIncentives({
+                        ...(res.data?.incentives || {}),
+                        stars: 0,
+                        star_balance: 0,
+                    });
+                } else {
+                    setModule(selectedModule);
+                    setCheckpoints(res.data?.checkpoints || []);
+                    setIncentives(res.data?.incentives || null);
+                }
                 setIsLoading(false);
             })
             .catch((err) => {
@@ -614,9 +644,16 @@ export default function StudentModuleDetails() {
         loadClassName();
         loadModuleDetails();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [schoolId, classId, moduleId]);
+    }, [schoolId, classId, moduleId, isAdminPreview]);
 
     const loadOfficeHoursStatus = useCallback((showLoading = false) => {
+        if (isAdminPreview) {
+            setOfficeHoursStatus(null);
+            setIsOfficeHoursLoading(false);
+            setOfficeHoursError("");
+            return;
+        }
+
         if (!classId || !moduleId) {
             setOfficeHoursStatus(null);
             setIsOfficeHoursLoading(false);
@@ -645,7 +682,7 @@ export default function StudentModuleDetails() {
             .finally(() => {
                 if (showLoading) setIsOfficeHoursLoading(false);
             });
-    }, [classId, moduleId]);
+    }, [classId, moduleId, isAdminPreview]);
 
     useEffect(() => {
         loadOfficeHoursStatus(true);
@@ -695,22 +732,30 @@ export default function StudentModuleDetails() {
     ]);
 
     const goBackToModules = () => {
-        navigate(`/student/school/${schoolId}/class/${classId}/modules`);
+        navigate(
+            isAdminPreview
+                ? adminPreviewBasePath
+                : `/student/school/${schoolId}/class/${classId}/modules`,
+        );
     };
 
     const openCheckpoint = (checkpointId: number) => {
         if (!mainProjectId) return;
 
         navigate(
-            `/student/school/${schoolId}/class/${classId}/module/${moduleId}/project/${mainProjectId}/checkpoint/${checkpointId}/upload`,
+            isAdminPreview
+                ? `${adminPreviewBasePath}/module/${moduleId}/project/${mainProjectId}/checkpoint/${checkpointId}/upload`
+                : `/student/school/${schoolId}/class/${classId}/module/${moduleId}/project/${mainProjectId}/checkpoint/${checkpointId}/upload`,
         );
     };
 
     const openMainProject = () => {
-        if (!mainProjectId || !allCheckpointSolved) return;
+        if (!mainProjectId || (!allCheckpointSolved && !isAdminPreview)) return;
 
         navigate(
-            `/student/school/${schoolId}/class/${classId}/module/${moduleId}/project/${mainProjectId}/upload`,
+            isAdminPreview
+                ? `${adminPreviewBasePath}/module/${moduleId}/project/${mainProjectId}/upload`
+                : `/student/school/${schoolId}/class/${classId}/module/${moduleId}/project/${mainProjectId}/upload`,
         );
     };
 
@@ -719,13 +764,14 @@ export default function StudentModuleDetails() {
         checkpointId: number,
         locked: boolean,
     ) => {
-        if (locked || (event.key !== "Enter" && event.key !== " ")) return;
+        if ((locked && !isAdminPreview) || (event.key !== "Enter" && event.key !== " ")) return;
 
         event.preventDefault();
         openCheckpoint(checkpointId);
     };
 
     const skipCheckpoint = (checkpointId: number) => {
+        if (isAdminPreview) return;
         if (!mainProjectId || !classId || !moduleId || skipBusyCheckpointId !== null) return;
 
         setActionMessage("");
@@ -760,6 +806,7 @@ export default function StudentModuleDetails() {
     };
 
     const joinOfficeHoursQueue = () => {
+        if (isAdminPreview) return;
         if (!classId || !moduleId || isOfficeHoursBusy) return;
         setIsOfficeHoursBusy(true);
         setOfficeHoursError("");
@@ -787,6 +834,7 @@ export default function StudentModuleDetails() {
     };
 
     const leaveOfficeHoursQueue = () => {
+        if (isAdminPreview) return;
         if (!classId || !moduleId || isOfficeHoursBusy) return;
         setIsOfficeHoursBusy(true);
         setOfficeHoursError("");
@@ -819,7 +867,7 @@ export default function StudentModuleDetails() {
             </Helmet>
 
             <MenuComponent
-                showUpload={true}
+                showUpload={!isAdminPreview}
                 showAdminUpload={false}
                 showHelp={false}
                 showCreate={false}
@@ -828,25 +876,48 @@ export default function StudentModuleDetails() {
             />
 
             <DirectoryBreadcrumbs
-                items={[
-                    { label: "School Selection", to: "/schools" },
-                    {
-                        label: "Class Selection",
-                        to: schoolId
-                            ? `/student/school/${schoolId}/classes`
-                            : "/schools",
-                    },
-                    {
-                        label: "Module List",
-                        to: `/student/school/${schoolId}/class/${classId}/modules`,
-                    },
-                    { label: "Module Details" },
-                ]}
+                items={isAdminPreview
+                    ? [
+                        { label: "School Selection", to: "/schools" },
+                        {
+                            label: "Class Selection",
+                            to: schoolId
+                                ? `/admin/school/${schoolId}/classes`
+                                : "/schools",
+                        },
+                        {
+                            label: "Admin Menu",
+                            to: `/admin/school/${schoolId}/class/${classId}/menu`,
+                        },
+                        { label: "Student Preview", to: adminPreviewBasePath },
+                        { label: "Module Details" },
+                    ]
+                    : [
+                        { label: "School Selection", to: "/schools" },
+                        {
+                            label: "Class Selection",
+                            to: schoolId
+                                ? `/student/school/${schoolId}/classes`
+                                : "/schools",
+                        },
+                        {
+                            label: "Module List",
+                            to: `/student/school/${schoolId}/class/${classId}/modules`,
+                        },
+                        { label: "Module Details" },
+                    ]}
             />
 
             <div className="pageTitle">
                 {className ? `${className} Student Module Details` : "Student Module Details"}
             </div>
+
+            {isAdminPreview ? (
+                <div className="module-details-message" role="status">
+                    Admin preview: progress is shown as a new student. Locked assignments can still be opened
+                    for review, but submissions and student-only actions are disabled.
+                </div>
+            ) : null}
 
             <div className="student-module-details-shell">
                 {isLoading ? (
@@ -990,6 +1061,7 @@ export default function StudentModuleDetails() {
                                     const locked = !completed && index > activeCheckpointIndex;
                                     const available = !completed && !locked;
                                     const canSkip =
+                                        !isAdminPreview &&
                                         available &&
                                         !completed &&
                                         checkpointSkipCost > 0 &&
@@ -1012,21 +1084,21 @@ export default function StudentModuleDetails() {
                                                 completed ? "is-complete" : "",
                                                 skipped ? "is-skipped" : "",
                                                 available ? "is-active" : "",
-                                                locked ? "is-locked" : "",
+                                                locked && !isAdminPreview ? "is-locked" : "",
                                             ]
                                                 .join(" ")
                                                 .trim()}
                                             key={problem.id}
                                             data-module-path-node="true"
-                                            role={locked ? "article" : "button"}
-                                            tabIndex={locked ? -1 : 0}
+                                            role={locked && !isAdminPreview ? "article" : "button"}
+                                            tabIndex={locked && !isAdminPreview ? -1 : 0}
                                             onClick={() => {
-                                                if (!locked) openCheckpoint(problem.id);
+                                                if (!locked || isAdminPreview) openCheckpoint(problem.id);
                                             }}
                                             onKeyDown={(event) =>
                                                 handleCheckpointKeyDown(event, problem.id, locked)
                                             }
-                                            aria-label={`${problem.name} ${completed ? "completed" : locked ? "locked" : "available"}`}
+                                            aria-label={`${problem.name} ${completed ? "completed" : locked ? "locked" : "available"}${isAdminPreview ? ", available in admin preview" : ""}`}
                                         >
                                             <div className="module-path-node-icon">
                                                 {completed ? (
@@ -1096,17 +1168,19 @@ export default function StudentModuleDetails() {
                                             ? "is-complete"
                                             : allCheckpointSolved
                                                 ? "is-active"
-                                                : "is-locked",
+                                                : isAdminPreview
+                                                    ? ""
+                                                    : "is-locked",
                                     ]
                                         .join(" ")
                                         .trim()}
                                     data-module-path-node="true"
-                                    role={allCheckpointSolved ? "button" : "article"}
-                                    tabIndex={allCheckpointSolved ? 0 : -1}
+                                    role={allCheckpointSolved || isAdminPreview ? "button" : "article"}
+                                    tabIndex={allCheckpointSolved || isAdminPreview ? 0 : -1}
                                     onClick={openMainProject}
                                     onKeyDown={(event) => {
                                         if (
-                                            !allCheckpointSolved ||
+                                            (!allCheckpointSolved && !isAdminPreview) ||
                                             (event.key !== "Enter" && event.key !== " ")
                                         )
                                             return;
@@ -1114,7 +1188,7 @@ export default function StudentModuleDetails() {
                                         event.preventDefault();
                                         openMainProject();
                                     }}
-                                    aria-label={`${mainProjectName} ${mainCompleted ? "completed" : allCheckpointSolved ? "unlocked" : "locked"}`}
+                                    aria-label={`${mainProjectName} ${mainCompleted ? "completed" : allCheckpointSolved ? "unlocked" : "locked"}${isAdminPreview ? ", available in admin preview" : ""}`}
                                 >
                                     <div className="module-path-node-icon">
                                         {mainCompleted ? (

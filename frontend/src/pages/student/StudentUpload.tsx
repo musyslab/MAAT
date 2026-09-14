@@ -5,7 +5,7 @@ import StarSpendingInfo from "../components/StarSpendingInfo";
 import ErrorMessage from "../components/ErrorMessage";
 import LoadingAnimation from "../components/LoadingAnimation";
 import { Helmet } from "react-helmet";
-import { useParams } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs";
 import DiffView from "../components/CodeDiffView";
 import PythonIDE, {
@@ -61,6 +61,7 @@ type ModuleObjectLite = {
   Start: string;
   End: string;
   MainProjectId?: number;
+  MainProjectName?: string;
   HasPresentation?: boolean;
   PresentationFileName?: string;
 };
@@ -321,6 +322,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     checkpoint_id?: string;
   }>();
 
+  const location = useLocation();
   const cid = parsePositiveInt(class_id) ?? -1;
   const schoolId = parsePositiveInt(school_id);
   const moduleId = parsePositiveInt(module_id);
@@ -332,6 +334,11 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
 
   const hasModuleRoute =
     schoolId !== null && moduleId !== null && routeProjectId !== null;
+  const isAdminPreview = location.pathname.includes("/student-preview");
+  const adminPreviewBasePath =
+    schoolId !== null
+      ? `/admin/school/${schoolId}/class/${cid}/student-preview`
+      : "";
 
   const [files, setFiles] = useState<File[]>([]);
   const [mainJavaFileName, setMainJavaFileName] = useState<string>("");
@@ -349,7 +356,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     useState<boolean>(true);
 
   const [project_id, setProject_id] = useState<number>(routeProjectId ?? 0);
-  const [is_allowed_to_submit] = useState<boolean>(true);
+  const is_allowed_to_submit = !isAdminPreview;
 
   const [suggestions, setSuggestions] = useState<string>("");
   const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
@@ -490,6 +497,13 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
             null;
 
           setModuleName(selectedModule?.Name || "");
+          if (
+            isAdminPreview &&
+            Number(selectedModule?.MainProjectId || 0) === Number(targetProjectId) &&
+            selectedModule?.MainProjectName
+          ) {
+            setProject_name(selectedModule.MainProjectName);
+          }
           setOfficeHoursModuleId(
             selectedModule?.Id ? Number(selectedModule.Id) : moduleId,
           );
@@ -506,7 +520,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
           }
         });
     },
-    [cid, hasModuleRoute, moduleId],
+    [cid, hasModuleRoute, moduleId, isAdminPreview],
   );
 
   const testcaseProgress = useMemo(() => {
@@ -580,12 +594,14 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     ? "Checkpoint submission"
     : "Main submission";
   const submissionTypeShortLabel = isCheckpoint ? "Checkpoint" : "Main";
-  const canSkipCooldown = isCoolingDown && cooldownSkipCost > 0 && starBalance >= cooldownSkipCost;
+  const canSkipCooldown =
+    !isAdminPreview && isCoolingDown && cooldownSkipCost > 0 && starBalance >= cooldownSkipCost;
   const hasSelectedProgram =
     submissionMethod === "editor"
       ? pythonIdeEnabled && Boolean(pythonSource.trim())
       : files.length > 0;
   const canSubmit =
+    !isAdminPreview &&
     !passedAllTests &&
     !isCoolingDown &&
     !isCooldownStateLoading &&
@@ -705,6 +721,12 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
   }, [cid, project_id, isCheckpoint, checkpointId]);
 
   const loadStudentUploadState = useCallback(() => {
+    if (isAdminPreview) {
+      setPreviousSubmissionId(null);
+      setCooldownLiftedAtMs(0);
+      return;
+    }
+
     const scope = buildUploadStateScope();
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
@@ -745,7 +767,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       .catch(() => {
         // incentive-state independently loads the authoritative cooldown timer.
       });
-  }, [buildUploadStateScope]);
+  }, [buildUploadStateScope, isAdminPreview]);
 
 
   const loadIncentiveState = useCallback((showLoading = false) => {
@@ -771,6 +793,23 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       })
       .then((res) => {
         const state = res.data || null;
+
+        if (isAdminPreview) {
+          setIncentives({
+            ...(state || {}),
+            stars: 0,
+            star_balance: 0,
+            submission_attempt_count: 0,
+            next_attempt_number: 1,
+            submission_cooldown_seconds: 0,
+            cooldown_remaining_seconds: 0,
+            office_hours_cooldown_exempt: false,
+            office_hours_cooldown_exempt_until: null,
+          });
+          setCooldownLiftedAtMs(0);
+          return;
+        }
+
         setIncentives(state);
         setCooldownLiftedAtMs(
           cooldownLiftedAtToMs(
@@ -788,9 +827,14 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       .finally(() => {
         if (showLoading) setIsCooldownStateLoading(false);
       });
-  }, [buildUploadStateScope]);
+  }, [buildUploadStateScope, isAdminPreview]);
 
   const loadOfficeHoursStatus = useCallback(() => {
+    if (isAdminPreview) {
+      setOfficeHoursStatus(null);
+      return;
+    }
+
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
     if (!token || cid <= 0 || !officeHoursModuleId) {
@@ -810,9 +854,14 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       .catch(() => {
         // Keep the last confirmed status during a transient polling failure.
       });
-  }, [cid, officeHoursModuleId]);
+  }, [cid, officeHoursModuleId, isAdminPreview]);
 
   const skipSubmissionCooldown = () => {
+    if (isAdminPreview) {
+      setIsSkipConfirmationOpen(false);
+      return;
+    }
+
     const scope = buildUploadStateScope();
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
@@ -917,6 +966,15 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
   };
 
   const fetchLatestSubmissionFromPastSubmissions = (): Promise<LatestPastSubmission | null> => {
+    if (isAdminPreview) {
+      clearPreviousSubmissionId();
+      setPassedAllTests(false);
+      setTestcasesPassedCount(0);
+      setTestcasesTotalCount(0);
+      setCheckedPassedAll(true);
+      return Promise.resolve(null);
+    }
+
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
     if (
@@ -1516,6 +1574,11 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       setProject_id(routeProjectId);
       loadModulePresentationStatus(routeProjectId);
 
+      if (isAdminPreview) {
+        setDueDate("");
+        return;
+      }
+
       axios
         .get(
           `${import.meta.env.VITE_API_URL}/submissions/GetSubmissionDetails?class_id=${cid}`,
@@ -1566,6 +1629,11 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
   }
 
   function submitSuggestions() {
+    if (isAdminPreview) {
+      alert("Feedback submission is disabled in admin preview.");
+      return;
+    }
+
     axios
       .post(
         `${import.meta.env.VITE_API_URL}/submissions/submit_suggestion`,
@@ -1611,6 +1679,12 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
 
   function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
+
+    if (isAdminPreview) {
+      setError_Message("Program submission is disabled in admin student preview.");
+      setIsErrorMessageHidden(false);
+      return;
+    }
 
     if (passedAllTests) return;
 
@@ -1831,6 +1905,23 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       pageTitle || (isCheckpoint ? "Checkpoint Upload" : "Project Upload");
 
     if (hasModuleRoute && schoolId && moduleId) {
+      if (isAdminPreview) {
+        return [
+          { label: "School Selection", to: "/schools" },
+          { label: "Class Selection", to: `/admin/school/${schoolId}/classes` },
+          {
+            label: "Admin Menu",
+            to: `/admin/school/${schoolId}/class/${cid}/menu`,
+          },
+          { label: "Student Preview", to: adminPreviewBasePath },
+          {
+            label: "Module Details",
+            to: `${adminPreviewBasePath}/module/${moduleId}`,
+          },
+          { label: "Student Upload" },
+        ];
+      }
+
       return [
         { label: "School Selection", to: "/schools" },
         { label: "Class Selection", to: `/student/school/${schoolId}/classes` },
@@ -1882,6 +1973,8 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     isCheckpoint,
     hideClassSelectionCrumb,
     class_id,
+    isAdminPreview,
+    adminPreviewBasePath,
   ]);
 
   const workspaceViews = [
@@ -1928,6 +2021,13 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       <DirectoryBreadcrumbs items={breadcrumbsItems} />
 
       <div className="pageTitle">Student Upload</div>
+
+      {isAdminPreview ? (
+        <div className="pageMessage" role="status">
+          Admin preview: this assignment is read-only. You can inspect instructions,
+          use the program workspace, and review the layout, but you cannot submit.
+        </div>
+      ) : null}
 
       <div className="student-upload-shell">
         <section
@@ -2680,11 +2780,13 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
                         )}
                       </span>
                       <span>
-                        {isCooldownStateLoading
-                          ? "Checking Cooldown"
-                          : isCoolingDown
-                            ? "Cooling Down"
-                            : "Submit program"}
+                        {isAdminPreview
+                          ? "Submission Disabled in Preview"
+                          : isCooldownStateLoading
+                            ? "Checking Cooldown"
+                            : isCoolingDown
+                              ? "Cooling Down"
+                              : "Submit program"}
                       </span>
                     </button>
                   </div>
@@ -2934,7 +3036,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
                     disableCopy
                     isPractice={isCheckpoint}
                     practiceProblemId={checkpointId}
-                    allowTestcaseInputPurchases
+                    allowTestcaseInputPurchases={!isAdminPreview}
                   />
                 </div>
               ) : (
