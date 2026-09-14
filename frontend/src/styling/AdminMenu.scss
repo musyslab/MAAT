@@ -15,9 +15,11 @@
         border: 1px solid #dbe2ea;
         border-radius: 24px;
         background:
-            radial-gradient(circle at top right,
+            radial-gradient(
+                circle at top right,
                 rgba(37, 99, 235, 0.1),
-                transparent 30%),
+                transparent 30%
+            ),
             linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
         box-shadow: 0 14px 35px rgba(15, 23, 42, 0.08);
     }
@@ -39,7 +41,7 @@
 
     .admin-menu-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 1rem;
         align-items: stretch;
     }
@@ -161,6 +163,12 @@
 
     .admin-menu-disabled-action {
         pointer-events: none;
+    }
+
+    @media (max-width: 1200px) {
+        .admin-menu-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
     }
 
     @media (max-width: 950px) {

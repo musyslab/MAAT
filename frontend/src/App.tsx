@@ -79,6 +79,26 @@ class App extends Component {
                             <AdminMenu />
                         </ProtectedRoute>
                     } />
+                    <Route path="/admin/school/:school_id/class/:class_id/student-preview" element={
+                        <ProtectedRoute>
+                            <StudentModuleList />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/admin/school/:school_id/class/:class_id/student-preview/module/:module_id" element={
+                        <ProtectedRoute>
+                            <StudentModuleDetails />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/admin/school/:school_id/class/:class_id/student-preview/module/:module_id/project/:project_id/upload" element={
+                        <ProtectedRoute>
+                            <StudentUpload />
+                        </ProtectedRoute>
+                    } />
+                    <Route path="/admin/school/:school_id/class/:class_id/student-preview/module/:module_id/project/:project_id/checkpoint/:checkpoint_id/upload" element={
+                        <ProtectedRoute>
+                            <StudentUpload />
+                        </ProtectedRoute>
+                    } />
                     <Route path="/admin/school/:school_id/class/:class_id/office-hours" element={
                         <ProtectedRoute>
                             <AdminOfficeHours />

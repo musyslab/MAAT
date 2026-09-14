@@ -1,7 +1,7 @@
 import { CSSProperties, KeyboardEvent, useEffect, useMemo, useState } from "react"
 import axios from "axios"
 import { Helmet } from "react-helmet"
-import { useNavigate, useParams } from "react-router-dom"
+import { useLocation, useNavigate, useParams } from "react-router-dom"
 import {
     FaCalendarAlt,
     FaChevronLeft,
@@ -60,9 +60,12 @@ const authHeader = () => ({
 export default function StudentModuleList() {
     const { school_id, class_id } = useParams<{ school_id: string; class_id: string }>()
     const navigate = useNavigate()
+    const location = useLocation()
 
     const schoolId = school_id || ""
     const classId = class_id || ""
+    const isAdminPreview = location.pathname.includes("/student-preview")
+    const adminPreviewBasePath = `/admin/school/${schoolId}/class/${classId}/student-preview`
 
     const [className, setClassName] = useState("")
     const [modules, setModules] = useState<ModuleObject[]>([])
@@ -212,7 +215,7 @@ export default function StudentModuleList() {
                     headers: authHeader(),
                     params: {
                         ...(schoolId ? { school_id: schoolId } : {}),
-                        role_context: "student"
+                        role_context: isAdminPreview ? "admin" : "student"
                     }
                 }
             )
@@ -270,7 +273,7 @@ export default function StudentModuleList() {
         loadClassName()
         loadModules()
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [schoolId, classId])
+    }, [schoolId, classId, isAdminPreview])
 
     const sortedModules = useMemo(() => {
         return [...modules].sort((a, b) => {
@@ -384,7 +387,11 @@ export default function StudentModuleList() {
     }
 
     const openModule = (module: ModuleObject) => {
-        navigate(`/student/school/${schoolId}/class/${classId}/module/${module.Id}`)
+        navigate(
+            isAdminPreview
+                ? `${adminPreviewBasePath}/module/${module.Id}`
+                : `/student/school/${schoolId}/class/${classId}/module/${module.Id}`
+        )
     }
 
     const handleModuleCardKeyDown = (event: KeyboardEvent<HTMLElement>, module: ModuleObject) => {
@@ -401,7 +408,7 @@ export default function StudentModuleList() {
             </Helmet>
 
             <MenuComponent
-                showUpload={true}
+                showUpload={!isAdminPreview}
                 showAdminUpload={false}
                 showHelp={false}
                 showCreate={false}
@@ -410,19 +417,39 @@ export default function StudentModuleList() {
             />
 
             <DirectoryBreadcrumbs
-                items={[
-                    { label: "School Selection", to: "/schools" },
-                    {
-                        label: "Class Selection",
-                        to: schoolId ? `/student/school/${schoolId}/classes` : "/schools"
-                    },
-                    { label: "Module List" }
-                ]}
+                items={isAdminPreview
+                    ? [
+                        { label: "School Selection", to: "/schools" },
+                        {
+                            label: "Class Selection",
+                            to: schoolId ? `/admin/school/${schoolId}/classes` : "/schools"
+                        },
+                        {
+                            label: "Admin Menu",
+                            to: `/admin/school/${schoolId}/class/${classId}/menu`
+                        },
+                        { label: "Student Preview" }
+                    ]
+                    : [
+                        { label: "School Selection", to: "/schools" },
+                        {
+                            label: "Class Selection",
+                            to: schoolId ? `/student/school/${schoolId}/classes` : "/schools"
+                        },
+                        { label: "Module List" }
+                    ]}
             />
 
             <div className="pageTitle">
                 {className ? `${className} Student Module List` : "Student Module List"}
             </div>
+
+            {isAdminPreview ? (
+                <div className="pageMessage" role="status">
+                    Admin preview: this is a read-only preview of the student experience.
+                    Submissions and student-only actions are disabled.
+                </div>
+            ) : null}
 
             <div className="module-calendar-command-row">
                 <div className="module-view-toggle" aria-label="Module view selector">
