@@ -649,13 +649,6 @@ export default function StudentModuleDetails() {
 
     useEffect(() => {
         loadOfficeHoursStatus(true);
-        const interval = window.setInterval(() => {
-            if (document.visibilityState === "visible") {
-                loadOfficeHoursStatus(false);
-            }
-        }, 15_000);
-
-        return () => window.clearInterval(interval);
     }, [loadOfficeHoursStatus]);
 
     useEffect(() => {

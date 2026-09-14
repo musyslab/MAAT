@@ -1604,10 +1604,10 @@ def module_presentation_path(module: Modules | None) -> str | None:
             and os.path.splitext(name)[1].lower() in ALLOWED_PRESENTATION_EXTS
         ]
     except OSError:
-        return None
+        candidates = []
 
     if not candidates:
-        return None
+        return ProjectRepository().default_module_presentation(module)
 
     return max(candidates, key=lambda path: os.path.getmtime(path))
 
@@ -2423,6 +2423,8 @@ def delete_checkpoint(project_repo: ProjectRepository = Provide[Container.projec
         if remaining_ids:
             remaining_rows = project_repo.reorder_checkpoints(project_id, remaining_ids)
         return jsonify({'ok': True})
+    except ValueError as exc:
+        return make_response({'message': str(exc)}, HTTPStatus.BAD_REQUEST)
     except Exception as exc:
         print(exc, flush=True)
         return make_response({'message': 'Could not delete checkpoint'}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -3588,6 +3590,32 @@ def remove_testcase(project_repo: ProjectRepository = Provide[Container.project_
         return access_denied_response(HTTPStatus.FORBIDDEN)
     project_repo.remove_testcase(id_val)
     return make_response("Testcase Removed", HTTPStatus.OK)
+
+@projects_api.route('/default_content', methods=['GET', 'POST'])
+@jwt_required()
+@inject
+def default_content(project_repo: ProjectRepository = Provide[Container.project_repo]):
+    if not is_staff_user():
+        return access_denied_response()
+    data = request.get_json(silent=True) if request.method == 'POST' else None
+    if request.method == 'POST' and not isinstance(data, dict):
+        return make_response({'message': 'Expected a JSON object'}, HTTPStatus.BAD_REQUEST)
+    class_id = parse_int(data.get('class_id') if data else request.args.get('class_id'), 0)
+    if not user_can_access_class_id(class_id):
+        return access_denied_response(HTTPStatus.FORBIDDEN)
+    try:
+        if request.method == 'POST':
+            return jsonify(project_repo.import_default_content(class_id, data.get('selected')))
+        return jsonify(project_repo.default_content_options(class_id))
+    except PermissionError as exc:
+        return make_response({'message': str(exc)}, HTTPStatus.FORBIDDEN)
+    except (ValueError, OSError) as exc:
+        return make_response({'message': str(exc)}, HTTPStatus.BAD_REQUEST)
+    except Exception:
+        from flask import current_app
+        current_app.logger.exception('Default content operation failed for class %s', class_id)
+        return make_response({'message': 'Import failed. Refresh the catalog before retrying.'}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
 
 @projects_api.route('/get_modules_by_class_id', methods=['GET'])
 @jwt_required()

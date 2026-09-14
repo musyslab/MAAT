@@ -1,0 +1,451 @@
+.default-import-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 0.7rem 1rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    background: #fff;
+    color: #1e293b;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgb(15 23 42 / 7%);
+}
+
+.default-import-dialog {
+    box-sizing: border-box;
+    position: fixed;
+    inset: 0;
+    width: min(760px, calc(100vw - 32px));
+    max-width: none;
+    max-height: min(850px, calc(100dvh - 40px));
+    margin: auto;
+    padding: 0;
+    border: 1px solid #dbe2ea;
+    border-radius: 20px;
+    background: #fff;
+    color: #1e293b;
+    font-family: inherit;
+    font-size: 15px;
+    line-height: 1.5;
+    text-align: left;
+    box-shadow: 0 28px 90px rgb(15 23 42 / 30%);
+    overflow: hidden;
+}
+
+.default-import-dialog[open] {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Native top-layer backdrop covers the full Admin Module List, including menus. */
+.default-import-dialog::backdrop {
+    background: rgb(15 23 42 / 48%);
+    -webkit-backdrop-filter: blur(7px);
+    backdrop-filter: blur(7px);
+}
+
+.default-import-dialog *,
+.default-import-dialog *::before,
+.default-import-dialog *::after {
+    box-sizing: border-box;
+}
+
+.default-import-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 26px 28px 8px;
+    flex-shrink: 0;
+}
+
+.default-import-eyebrow {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+}
+
+.default-import-header h2 {
+    margin: 6px 0 0;
+    color: #0f172a;
+    font-size: clamp(21px, 3vw, 27px);
+    font-weight: 800;
+    line-height: 1.25;
+}
+
+.default-import-description {
+    margin: 0;
+    padding: 0 28px 22px;
+    color: #64748b;
+    flex-shrink: 0;
+}
+
+.default-import-dialog button {
+    width: auto;
+    margin: 0;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    line-height: 1.4;
+    text-transform: none;
+}
+
+.default-import-dialog .default-import-icon-button {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    color: #64748b;
+    background: #fff;
+}
+
+.default-import-content {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding: 20px 28px;
+    border-top: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+
+.default-import-folders {
+    display: grid;
+    gap: 12px;
+}
+
+.default-import-content > .default-import-actions {
+    margin-top: 16px;
+}
+
+.default-import-content > .default-import-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.default-import-content > .default-import-actions button svg {
+    flex-shrink: 0;
+}
+
+.default-import-folder {
+    border: 1px solid #dbe2ea;
+    border-radius: 12px;
+    background: #fff;
+    overflow: hidden;
+}
+
+.default-import-folder-header {
+    display: flex;
+    align-items: center;
+    padding-left: 16px;
+}
+
+.default-import-module-checkbox {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: #2563eb;
+    cursor: pointer;
+}
+
+.default-import-module-checkbox:disabled {
+    cursor: not-allowed;
+}
+
+.default-import-dialog .default-import-folder-toggle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+    width: auto;
+    padding: 16px 12px;
+    border: 0;
+    border-radius: 0;
+    color: #1e293b;
+    background: #fff;
+    text-align: left;
+}
+
+.default-import-dialog .default-import-folder-toggle:hover {
+    background: #f1f5f9;
+}
+
+.default-import-chevron {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #64748b;
+    transition: transform 150ms;
+}
+
+.default-import-folder-toggle[aria-expanded="true"] .default-import-chevron {
+    transform: rotate(90deg);
+}
+
+.default-import-folder-icon {
+    flex-shrink: 0;
+    font-size: 24px;
+    color: #b7791f;
+}
+
+.default-import-folder-name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.default-import-folder-name small {
+    display: block;
+    margin-top: 3px;
+    color: #64748b;
+    font-weight: 400;
+    font-size: 12px;
+}
+
+.default-import-count {
+    flex-shrink: 0;
+    border-radius: 20px;
+    padding: 3px 9px;
+    color: #1d4ed8;
+    background: #eff6ff;
+    font-size: 11px;
+}
+
+.default-import-assignments {
+    padding: 0 16px 10px 38px;
+}
+
+.default-import-assignments[hidden] {
+    display: none;
+}
+
+.default-import-assignment {
+    border-left: 2px solid #e2e8f0;
+    padding: 5px 0 5px 14px;
+}
+
+.default-import-assignment label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    cursor: pointer;
+}
+
+.default-import-assignment input {
+    flex-shrink: 0;
+    width: 17px;
+    height: 17px;
+    margin: 0;
+    accent-color: #2563eb;
+}
+
+.default-import-assignment label>svg {
+    flex-shrink: 0;
+    color: #94a3b8;
+}
+
+.default-import-assignment-name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.default-import-badge {
+    flex-shrink: 0;
+    border-radius: 6px;
+    padding: 3px 7px;
+    color: #166534;
+    background: #f0fdf4;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.default-import-badge-error {
+    color: #9a3412;
+    background: #fff7ed;
+}
+
+.default-import-item-error {
+    margin: 0 0 8px 27px;
+    color: #9a3412;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.default-import-alert,
+.default-import-success {
+    margin: 0 0 16px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    overflow-wrap: anywhere;
+}
+
+.default-import-alert {
+    color: #991b1b;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+}
+
+.default-import-success {
+    color: #166534;
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+}
+
+.default-import-empty {
+    color: #64748b;
+    text-align: center;
+    padding: 24px 0;
+}
+
+.default-import-progress {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 14px;
+    color: #1e40af;
+    background: #eff6ff;
+    border-radius: 10px;
+}
+
+.default-import-spinner {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #bfdbfe;
+    border-top-color: #2563eb;
+    border-radius: 50%;
+    animation: default-import-spin 800ms linear infinite;
+}
+
+@keyframes default-import-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.default-import-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 28px;
+    border-top: 1px solid #e2e8f0;
+    flex-shrink: 0;
+}
+
+.default-import-footer>span {
+    font-weight: 700;
+    font-size: 13px;
+}
+
+.default-import-footer small {
+    display: block;
+    margin-top: 3px;
+    color: #64748b;
+    font-weight: 400;
+    font-size: 11px;
+}
+
+.default-import-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.default-import-actions button {
+    padding: 9px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 9px;
+    background: #fff;
+    color: #334155;
+}
+
+.default-import-actions .default-import-primary {
+    background: #2563eb;
+    border-color: #2563eb;
+    color: #fff;
+}
+
+.default-import-dialog button:disabled,
+.default-import-trigger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.default-import-dialog button:focus-visible,
+.default-import-dialog input:focus-visible,
+.default-import-trigger:focus-visible {
+    outline: 3px solid #60a5fa;
+    outline-offset: -3px;
+}
+
+.default-import-actions button:hover:not(:disabled),
+.default-import-icon-button:hover:not(:disabled) {
+    filter: brightness(0.95);
+}
+
+@media (max-width: 600px) {
+    .default-import-header {
+        padding: 20px 16px 8px;
+    }
+
+    .default-import-description {
+        padding: 0 16px 16px;
+    }
+
+    .default-import-content {
+        padding: 16px 12px;
+    }
+
+    .default-import-footer {
+        align-items: stretch;
+        flex-direction: column;
+        padding: 16px;
+        gap: 12px;
+    }
+
+    .default-import-actions {
+        flex-wrap: wrap;
+    }
+
+    .default-import-actions button {
+        flex: 1;
+    }
+
+    .default-import-assignments {
+        padding-left: 20px;
+        padding-right: 10px;
+    }
+
+    .default-import-folder-toggle {
+        flex-wrap: wrap;
+    }
+
+    .default-import-assignment label {
+        flex-wrap: wrap;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .default-import-spinner {
+        animation: none;
+    }
+
+    .default-import-chevron {
+        transition: none;
+    }
+}

@@ -2,6 +2,7 @@ import os
 import subprocess
 from typing import Optional, Dict
 from .models import (
+    DefaultContentImports,
     Projects,
     Checkpoints,
     MainAssignmentGrades,
@@ -61,6 +62,281 @@ def normalize_grader_language(language: str, solution_root: str = "") -> str:
 
 
 class ProjectRepository():
+
+    DEFAULT_ROOT = '/tabot-files/project-files/Default-Assignment-Content'
+
+    def _default_catalog(self):
+        """Folder identities do not depend on companion filenames."""
+        from pathlib import Path
+        import re
+        root = Path(self.DEFAULT_ROOT)
+        if not root.is_dir():
+            raise ValueError('Default assignment content folder is missing.')
+        def natural(path):
+            return [int(v) if v.isdigit() else v.casefold()
+                    for v in re.split(r'(\d+)', path.name)]
+        items = []
+        for folder in sorted((p for p in root.iterdir() if p.is_dir()), key=natural):
+            for assignment in sorted((p for p in folder.iterdir() if p.is_dir()), key=natural):
+                match = re.fullmatch(r'Checkpoint\s*#?\s*([1-9]\d*)', assignment.name, re.I)
+                if assignment.name.casefold() != 'main project' and not match:
+                    continue
+                number = int(match.group(1)) if match else None
+                key = folder.name + '/' + ('main' if number is None else f'checkpoint-{number}')
+                if any(item['key'] == key for item in items):
+                    raise ValueError(f'Duplicate assignment folder: {assignment}')
+                items.append(dict(key=key, module=folder.name, label=assignment.name,
+                                  number=number, path=assignment))
+        return items
+
+    def _default_files(self, item):
+        files = [p for p in item['path'].iterdir() if p.is_file()]
+        def single(extension, candidates=files):
+            matches = [p for p in candidates if p.suffix.lower() == extension]
+            if len(matches) != 1:
+                raise ValueError(f"{item['module']}/{item['label']}: expected exactly one {extension} file; found {len(matches)}")
+            return matches[0]
+        source, pdf, cases_file = single('.py'), single('.pdf'), single('.json')
+        presentation = single('.pdf', [p for p in item['path'].parent.iterdir() if p.is_file()])
+        cases = json.loads(cases_file.read_text(encoding='utf-8-sig'))
+        if not isinstance(cases, list) or not cases:
+            raise ValueError(f"{item['key']}: expected a nonempty testcase array")
+        orders = set()
+        for case in cases:
+            if (not isinstance(case, dict)
+                    or any(not isinstance(case.get(k), str) for k in ('name', 'input', 'output'))
+                    or type(case.get('hidden')) is not bool
+                    or type(case.get('order')) is not int
+                    or case['order'] < 1 or case['order'] in orders):
+                raise ValueError(f"{item['key']}: invalid testcase or duplicate order")
+            orders.add(case['order'])
+        return source, pdf, cases_file, presentation, cases
+
+    def _default_existing(self, cls, items):
+        existing = {row.SourceKey: row for row in DefaultContentImports.query.filter_by(ClassId=cls.Id).all()}
+        # Recognize the previous one-shot importer without changing rows on GET.
+        # FirstName survives teacher renames; the ID suffix identifies its modules.
+        if cls.DefaultContentInitialized:
+            from types import SimpleNamespace
+            for module in Modules.query.filter_by(ClassId=cls.Id).all():
+                if any(row.ModuleId == module.Id for row in existing.values()):
+                    continue
+                if not (module.FileTimestamp or '').endswith(f'_{module.Id}'):
+                    continue
+                project = self.get_main_project_for_module(module.Id)
+                if not project:
+                    continue
+                for item in items:
+                    if item['key'] in existing or item['module'] != module.FirstName:
+                        continue
+                    target = project if item['number'] is None else next((
+                        cp for cp in Checkpoints.query.filter_by(ProjectId=project.Id).all()
+                        if (cp.FirstName or '').startswith(f"Checkpoint {item['number']}: ")), None)
+                    if target and target.solutionpath:
+                        existing[item['key']] = SimpleNamespace(ModuleId=module.Id, AssignmentId=target.Id)
+        return existing
+
+    def default_content_options(self, class_id):
+        cls = Classes.query.filter_by(Id=int(class_id)).first()
+        if not cls or not cls.School.UseDefaultMaterials:
+            return dict(enabled=False, items=[])
+        items = self._default_catalog()
+        existing = self._default_existing(cls, items)
+        result = []
+        for item in items:
+            error = None
+            if item['key'] not in existing:
+                try:
+                    self._default_files(item)
+                except (ValueError, OSError) as exc:
+                    error = str(exc)
+            result.append(dict(key=item['key'], module=item['module'], label=item['label'],
+                               imported=item['key'] in existing, error=error))
+        return dict(enabled=True, items=result)
+
+    def import_default_content(self, class_id, selected):
+        from datetime import timedelta
+        from pathlib import Path
+        if not isinstance(selected, list) or not selected or any(not isinstance(k, str) for k in selected):
+            raise ValueError('Select at least one project.')
+        try:
+            cls = (Classes.query.filter_by(Id=int(class_id)).populate_existing().with_for_update().one())
+            db.session.refresh(cls.School)
+            if not cls.School.UseDefaultMaterials:
+                raise PermissionError('Default assignment content is disabled for this school.')
+            items = self._default_catalog()
+            catalog = {item['key']: item for item in items}
+            if set(selected) - catalog.keys():
+                raise ValueError('The catalog changed. Refresh and select projects again.')
+            existing = self._default_existing(cls, items)
+            pending = [item for item in items if item['key'] in selected and item['key'] not in existing]
+            validated = [(item, self._default_files(item)) for item in pending]
+            now = datetime.now()
+            modules = {}
+            for key, row in existing.items():
+                if key in catalog:
+                    modules[catalog[key]['module']] = self.get_module(row.ModuleId)
+                if not isinstance(row, DefaultContentImports):
+                    db.session.add(DefaultContentImports(ClassId=cls.Id, SourceKey=key,
+                        ModuleId=row.ModuleId, AssignmentId=row.AssignmentId))
+            for item, (source, pdf, cases_file, presentation, cases) in validated:
+                module = modules.get(item['module'])
+                if module is None:
+                    module = Modules(ClassId=cls.Id, Name=item['module'], FirstName=item['module'],
+                                     Start=now, End=now + timedelta(days=365))
+                    db.session.add(module)
+                    db.session.flush()
+                    module.FileTimestamp = f'{now:%Y%m%d_%H%M%S}_{module.Id}'
+                    modules[item['module']] = module
+                    project = Projects(ClassId=cls.Id, ModuleId=module.Id, Name=item['module'],
+                                       FirstName=item['module'], Language='python', AdditionalFilePath='[]')
+                    db.session.add(project)
+                    db.session.flush()
+                else:
+                    project = self.get_main_project_for_module(module.Id)
+                    if project is None:
+                        raise ValueError('The imported module no longer has its main project.')
+                if item['number'] is None:
+                    target = project
+                    if target.solutionpath or target.AsnDescriptionPath:
+                        raise ValueError(f"{item['module']}: main project already contains teacher content.")
+                    target.Name = target.FirstName = source.stem
+                else:
+                    # Append without renumbering existing teacher work.
+                    used = [cp.CheckpointNumber or 0 for cp in Checkpoints.query.filter_by(ProjectId=project.Id).all()]
+                    number = item['number'] if item['number'] not in used else max(used + [0]) + 1
+                    name = f"Checkpoint {item['number']}: {source.stem}"
+                    target = Checkpoints(ProjectId=project.Id, CheckpointNumber=number, Enabled=True,
+                                         Name=name, FirstName=name, Language='python', AdditionalFilePath='[]')
+                    db.session.add(target)
+                    db.session.flush()
+                # Class-owned database rows reference the same canonical files.
+                # Upload endpoints create private version directories on edits.
+                target.solutionpath = str(source.parent.resolve())
+                target.AsnDescriptionPath = str(pdf.resolve())
+                target.Language = 'python'
+                for case in sorted(cases, key=lambda case: case['order']):
+                    db.session.add(Testcases(ProjectId=project.Id,
+                        CheckpointId=target.Id if item['number'] is not None else None,
+                        Name=case['name'], input=case['input'], Output=case['output'],
+                        Hidden=case['hidden'], SortOrder=case['order'], Checkpoint=item['number'] is not None))
+                db.session.add(DefaultContentImports(ClassId=cls.Id, SourceKey=item['key'],
+                                                     ModuleId=module.Id, AssignmentId=target.Id))
+            if pending:
+                cls.DefaultContentInitialized = True
+            db.session.commit()
+            return dict(imported=len(pending), skipped=len(set(selected)) - len(pending))
+        except Exception:
+            db.session.rollback()
+            raise
+
+    def default_module_presentation(self, module):
+        """Shared fallback; a teacher-uploaded presentation takes precedence."""
+        from pathlib import Path
+        if module is None:
+            return None
+        rows = DefaultContentImports.query.filter_by(
+            ClassId=module.ClassId, ModuleId=module.Id).all()
+        names = {row.SourceKey.rsplit('/', 1)[0] for row in rows}
+        root = Path(self.DEFAULT_ROOT).resolve()
+        for name in sorted(names):
+            folder = (root / name).resolve()
+            if folder.parent != root or not folder.is_dir():
+                continue
+            pdfs = sorted(p for p in folder.iterdir()
+                          if p.is_file() and p.suffix.lower() == '.pdf')
+            if len(pdfs) == 1:
+                return str(pdfs[0])
+        return None
+
+    def deduplicate_default_content(self, apply=False):
+        """Run with application writers stopped. Default is a read-only preview.
+
+        Relink only byte-identical files in the old importer's directory layout.
+        Teacher-modified assignments and extra files are deliberately retained.
+        Commit references before removing any duplicates; never delete recursively.
+        """
+        from pathlib import Path
+        from werkzeug.utils import secure_filename
+        import filecmp
+        report = dict(assignments=[], presentations=[], skipped=[], cleanup_errors=[])
+        cleanup = set()
+        items = self._default_catalog()
+        def segment(value):
+            return secure_filename(str(value)) or 'content'
+        try:
+            for cls in Classes.query.all():
+                existing = self._default_existing(cls, items)
+                for item in items:
+                    row = existing.get(item['key'])
+                    if row is None:
+                        continue
+                    module = self.get_module(row.ModuleId)
+                    project = self.get_main_project_for_module(row.ModuleId)
+                    if not module or not project or module.ClassId != cls.Id:
+                        continue
+                    target = (project if item['number'] is None else
+                              Checkpoints.query.filter_by(Id=row.AssignmentId,
+                                                          ProjectId=project.Id).first())
+                    if not target or target.Id != row.AssignmentId:
+                        continue
+                    try:
+                        source, pdf, cases_file, presentation, _ = self._default_files(item)
+                    except (ValueError, OSError) as exc:
+                        report['skipped'].append(str(exc))
+                        continue
+                    module_dir = (Path('/tabot-files/project-files') /
+                                  segment(cls.School.Name) / segment(cls.Name) /
+                                  'teacher-files' /
+                                  f'{module.FileTimestamp}_{segment(module.FirstName)}')
+                    old = Path(target.solutionpath or '')
+                    expected_parent = (module_dir /
+                                       ('main' if item['number'] is None else 'checkpoint') /
+                                       f'default_{target.Id}')
+                    originals = (source, pdf, cases_file)
+                    can_relink = (
+                        old.is_dir() and not old.is_symlink()
+                        and old.parent == expected_parent
+                        and Path(target.AsnDescriptionPath or '') == old / pdf.name
+                        and not self.json_list_field(target.AdditionalFilePath)
+                        and {p.name for p in old.iterdir()} == {p.name for p in originals}
+                        and all((old / p.name).is_file() and not (old / p.name).is_symlink()
+                                and filecmp.cmp(old / p.name, p, shallow=False)
+                                for p in originals))
+                    if can_relink:
+                        report['assignments'].append(dict(class_id=cls.Id, key=item['key']))
+                        if apply:
+                            target.solutionpath = str(source.parent.resolve())
+                            target.AsnDescriptionPath = str(pdf.resolve())
+                            cleanup.update(old / p.name for p in originals)
+                    elif old.resolve() != source.parent.resolve():
+                        report['skipped'].append(f"Class {cls.Id}: {item['key']} (customized or unrecognized files)")
+                    # Record legacy imports so presentation fallback also works.
+                    if apply and not isinstance(row, DefaultContentImports):
+                        db.session.add(DefaultContentImports(ClassId=cls.Id,
+                            SourceKey=item['key'], ModuleId=row.ModuleId,
+                            AssignmentId=row.AssignmentId))
+                    local_pdf = module_dir / presentation.name
+                    if (local_pdf.is_file() and not local_pdf.is_symlink()
+                            and filecmp.cmp(local_pdf, presentation, shallow=False)):
+                        if str(local_pdf) not in report['presentations']:
+                            report['presentations'].append(str(local_pdf))
+                        if apply:
+                            cleanup.add(local_pdf)
+            if apply:
+                db.session.commit()
+        except Exception:
+            if apply:
+                db.session.rollback()
+            raise
+        # The caller must stop web/grading workers during migration, preventing
+        # uploads or reads from racing the database switch and file cleanup.
+        for path in sorted(cleanup):
+            try:
+                path.unlink()
+            except OSError as exc:
+                report['cleanup_errors'].append(f'{path}: {exc}')
+        return report
 
     def json_list_field(self, raw: str) -> list[str]:
         try:
@@ -422,6 +698,16 @@ class ProjectRepository():
         if not pp:
             return None
 
+        project = Projects.query.filter_by(Id=pp.ProjectId).first()
+        cls = Classes.query.filter_by(Id=project.ClassId).first() if project else None
+        legacy_imported = False
+        if cls and cls.DefaultContentInitialized:
+            try:
+                legacy_imported = any(row.AssignmentId == pp.Id for row in self._default_existing(cls, self._default_catalog()).values())
+            except (ValueError, OSError):
+                pass
+        if legacy_imported or DefaultContentImports.query.filter_by(AssignmentId=pp.Id).first():
+            raise ValueError("Imported default projects cannot be deleted.")
         project_id = int(pp.ProjectId)
         pp.Enabled = False
         pp.CheckpointNumber = self._next_checkpoint_number_scratch_base(project_id)

@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS `Grades`;
 DROP TABLE IF EXISTS `Testcases`;
 DROP TABLE IF EXISTS `Submissions`;
 DROP TABLE IF EXISTS `ClassAssignments`;
+DROP TABLE IF EXISTS `DefaultContentImports`;
 DROP TABLE IF EXISTS `Assignments`;
 DROP TABLE IF EXISTS `Modules`;
 DROP TABLE IF EXISTS `LectureSections`;
@@ -29,6 +30,7 @@ CREATE TABLE `Schools` (
   `Name` varchar(255) NOT NULL,
   `AuthProvider` varchar(20) NOT NULL,
   `RequiresLabAndLecture` tinyint(1) NOT NULL DEFAULT 1,
+  `UseDefaultMaterials` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`Id`),
   UNIQUE KEY `uq_schools_name` (`Name`),
   CONSTRAINT `ck_schools_auth_provider`
@@ -53,6 +55,7 @@ CREATE TABLE `Classes` (
   `Id` int NOT NULL AUTO_INCREMENT,
   `Name` varchar(255) NOT NULL,
   `SchoolId` int NOT NULL,
+  `DefaultContentInitialized` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`Id`),
   UNIQUE KEY `uq_classes_school_name` (`SchoolId`, `Name`),
   KEY `idx_classes_school` (`SchoolId`),
@@ -466,6 +469,22 @@ CREATE TABLE `SubmissionAnnotations` (
   CONSTRAINT `fk_submission_annotations_submission`
     FOREIGN KEY (`SubmissionId`) REFERENCES `Submissions` (`Id`)
     ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `DefaultContentImports` (
+  `ClassId` int NOT NULL,
+  `SourceKey` varchar(700) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `ModuleId` int NOT NULL,
+  `AssignmentId` int NOT NULL,
+  PRIMARY KEY (`ClassId`, `SourceKey`),
+  KEY `idx_default_content_imports_module` (`ModuleId`),
+  KEY `idx_default_content_imports_assignment` (`AssignmentId`),
+  CONSTRAINT `fk_default_content_imports_class`
+    FOREIGN KEY (`ClassId`) REFERENCES `Classes` (`Id`),
+  CONSTRAINT `fk_default_content_imports_module`
+    FOREIGN KEY (`ModuleId`) REFERENCES `Modules` (`Id`),
+  CONSTRAINT `fk_default_content_imports_assignment`
+    FOREIGN KEY (`AssignmentId`) REFERENCES `Assignments` (`Id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 INSERT INTO `Schools` (`Id`, `Name`, `AuthProvider`, `RequiresLabAndLecture`)

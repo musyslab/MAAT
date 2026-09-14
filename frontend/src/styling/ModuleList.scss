@@ -14,8 +14,43 @@
         display: flex;
         align-items: stretch;
         justify-content: center;
-        gap: 15rem;
-        flex-wrap: nowrap;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+
+        >.button-create-assignment,
+        >.default-import-trigger,
+        >.module-view-toggle {
+            box-sizing: border-box;
+            flex: 1 1 15rem;
+            min-width: 0;
+            max-width: 100%;
+        }
+
+        >.button-create-assignment,
+        >.default-import-trigger {
+            white-space: normal;
+            overflow-wrap: anywhere;
+            line-height: 1.4;
+        }
+
+        >.default-import-trigger svg,
+        >.button-create-assignment svg,
+        .module-view-toggle-button svg {
+            flex-shrink: 0;
+        }
+
+        >[role="status"],
+        >[role="alert"] {
+            flex: 1 0 100%;
+            margin: 0;
+            overflow-wrap: anywhere;
+        }
+    }
+
+    @media (min-width: 901px) {
+        .module-calendar-command-row {
+            column-gap: clamp(3rem, 12vw, 15rem);
+        }
     }
 
     .button-create-assignment {
@@ -1152,5 +1187,78 @@
         .calendar-today-button {
             width: 100%;
         }
+    }
+}
+
+.module-overlap-dialog {
+    box-sizing: border-box;
+    width: min(480px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    margin: auto;
+    padding: 28px;
+    overflow: auto;
+    border: 1px solid #fcd34d;
+    border-radius: 18px;
+    background: #fff;
+    color: #1e293b;
+    font-family: inherit;
+    text-align: left;
+    box-shadow: 0 28px 90px rgb(15 23 42 / 30%);
+
+    &::backdrop {
+        background: rgb(15 23 42 / 48%);
+        backdrop-filter: blur(7px);
+        -webkit-backdrop-filter: blur(7px);
+    }
+
+    h2 {
+        margin: 8px 0 12px;
+        font-size: 24px;
+    }
+
+    p {
+        line-height: 1.6;
+        color: #475569;
+    }
+
+    .module-overlap-eyebrow {
+        color: #92400e;
+        font-size: 13px;
+        font-weight: 800;
+        text-transform: uppercase;
+    }
+
+    .module-overlap-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 24px;
+    }
+
+    button {
+        flex: 1 1 150px;
+        padding: 12px 16px;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        background: #fff;
+        color: #334155;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+
+        &:hover {
+            filter: brightness(0.95);
+        }
+
+        &:focus-visible {
+            outline: 3px solid #60a5fa;
+            outline-offset: 3px;
+        }
+    }
+
+    .module-overlap-continue {
+        background: #92400e;
+        border-color: #92400e;
+        color: #fff;
     }
 }

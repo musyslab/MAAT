@@ -28,6 +28,7 @@ class Schools(db.Model):
     Name = Column(String(255), nullable=False, unique=True)
     AuthProvider = Column(String(20), nullable=False)
     RequiresLabAndLecture = Column(Boolean, nullable=False, default=True)
+    UseDefaultMaterials = Column(Boolean, nullable=False, default=False, server_default="0")
 
     Classes = relationship("Classes", back_populates="School")
 
@@ -53,6 +54,8 @@ class Classes(db.Model):
     Id = Column(Integer, primary_key=True, autoincrement=True)
     Name = Column(String(255), nullable=False)
     SchoolId = Column(Integer, ForeignKey("Schools.Id"), nullable=False)
+
+    DefaultContentInitialized = Column(Boolean, nullable=False, default=False, server_default="0")
 
     School = relationship("Schools", back_populates="Classes")
 
@@ -541,3 +544,11 @@ class SubmissionAnnotations(db.Model):
     ErrorId = Column(String(80), nullable=False)
     Count = Column(Integer, nullable=False, default=1)
     Note = Column(Text)
+
+
+class DefaultContentImports(db.Model):
+    __tablename__ = "DefaultContentImports"
+    ClassId = Column(Integer, ForeignKey("Classes.Id"), primary_key=True)
+    SourceKey = Column(String(700, collation="utf8mb4_bin"), primary_key=True)
+    ModuleId = Column(Integer, ForeignKey("Modules.Id"), nullable=False)
+    AssignmentId = Column(Integer, ForeignKey("Assignments.Id"), nullable=False)

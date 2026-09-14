@@ -3,9 +3,11 @@ import {
     KeyboardEvent,
     useEffect,
     useMemo,
+    useRef,
     useState,
 } from "react";
 import axios from "axios";
+import { createPortal } from "react-dom";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import { eachDayOfInterval } from "date-fns";
@@ -17,11 +19,11 @@ import {
     FaChevronRight,
     FaListUl,
     FaEdit,
-    FaPlusCircle,
     FaSave,
     FaTimes,
 } from "react-icons/fa";
 
+import DefaultContentImport from "../components/DefaultContentImport";
 import MenuComponent from "../components/MenuComponent";
 import "../../styling/ModuleList.scss";
 import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs";
@@ -184,29 +186,6 @@ const dateRangeOverlapsRanges = (
     return ranges.some((range) => start < range.end && end > range.start);
 };
 
-const moveDateToFirstAvailableTime = (
-    date: Date | null,
-    ranges: DateRange[],
-): Date | null => {
-    if (!date || !dateOverlapsRange(date, ranges)) return date;
-
-    const candidate = new Date(date);
-    candidate.setHours(0, 0, 0, 0);
-
-    while (candidate.toDateString() === date.toDateString()) {
-        if (!dateOverlapsRange(candidate, ranges)) {
-            return candidate;
-        }
-
-        candidate.setMinutes(candidate.getMinutes() + 15);
-    }
-
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 0, 0);
-
-    return dateOverlapsRange(endOfDay, ranges) ? date : endOfDay;
-};
-
 function DateTimeField({
     label,
     value,
@@ -267,6 +246,41 @@ export default function AdminModuleList() {
     const navigate = useNavigate();
     const schoolId = school_id || "";
     const classId = class_id || id || "";
+
+    const overlapDialog = useRef<HTMLDialogElement>(null);
+    const overlapDecision = useRef<((confirmed: boolean) => void) | null>(null);
+    const [overlapWarningOpen, setOverlapWarningOpen] = useState(false);
+
+    const confirmOverlap = (): Promise<boolean> => new Promise(resolve => {
+        overlapDecision.current = resolve;
+        overlapDialog.current?.showModal();
+        setOverlapWarningOpen(true);
+    });
+
+    const closeOverlapWarning = (confirmed: boolean) => {
+        const resolve = overlapDecision.current;
+        overlapDecision.current = null;
+        overlapDialog.current?.close();
+        setOverlapWarningOpen(false);
+        resolve?.(confirmed);
+    };
+
+    useEffect(() => {
+        if (!overlapWarningOpen) return;
+        const html = document.documentElement;
+        const previous = html.style.overflow;
+        const bodyPrevious = document.body.style.overflow;
+        html.style.overflow = "hidden";
+        document.body.style.overflow = "hidden";
+        return () => {
+            html.style.overflow = previous;
+            document.body.style.overflow = bodyPrevious;
+        };
+    }, [overlapWarningOpen]);
+
+    useEffect(() => () => {
+        overlapDecision.current?.(false);
+    }, []);
 
     const [className, setClassName] = useState("");
     const [modules, setModules] = useState<ModuleObject[]>([]);
@@ -557,17 +571,7 @@ export default function AdminModuleList() {
             : null;
 
     const setNewModuleDate = (dateValue: string, isStart: boolean) => {
-        let finalDate = parseDateTimeLocal(dateValue);
-        const previousDate = parseDateTimeLocal(
-            isStart ? newModuleStart : newModuleEnd,
-        );
-        const isNewDay =
-            !previousDate ||
-            (finalDate && finalDate.toDateString() !== previousDate.toDateString());
-
-        if (finalDate && isNewDay) {
-            finalDate = moveDateToFirstAvailableTime(finalDate, moduleConflictRanges);
-        }
+        const finalDate = parseDateTimeLocal(dateValue);
 
         if (isStart) {
             setNewModuleStart(finalDate ? formatDateTimeLocal(finalDate) : "");
@@ -611,17 +615,7 @@ export default function AdminModuleList() {
         const conflictRanges = getModuleConflictRanges(
             editingModuleId ?? undefined,
         );
-        let finalDate = parseDateTimeLocal(dateValue);
-        const previousDate = parseDateTimeLocal(
-            isStart ? editModuleStart : editModuleEnd,
-        );
-        const isNewDay =
-            !previousDate ||
-            (finalDate && finalDate.toDateString() !== previousDate.toDateString());
-
-        if (finalDate && isNewDay) {
-            finalDate = moveDateToFirstAvailableTime(finalDate, conflictRanges);
-        }
+        const finalDate = parseDateTimeLocal(dateValue);
 
         if (isStart) {
             setEditModuleStart(finalDate ? formatDateTimeLocal(finalDate) : "");
@@ -639,6 +633,7 @@ export default function AdminModuleList() {
     };
 
     const saveModuleEdit = async () => {
+        if (savingEditModule || overlapDecision.current) return;
         if (editingModuleId === null) return;
 
         const trimmedName = editModuleName.trim();
@@ -662,11 +657,8 @@ export default function AdminModuleList() {
 
         const conflictRanges = getModuleConflictRanges(editingModuleId);
         if (dateRangeOverlapsRanges(start, end, conflictRanges)) {
-            window.alert(
-                "The selected dates overlap with an existing module. Please adjust your dates.",
-            );
             setEditOverlapError(true);
-            return;
+            if (!(await confirmOverlap())) return;
         }
 
         try {
@@ -831,6 +823,7 @@ export default function AdminModuleList() {
     };
 
     const createModule = async () => {
+        if (savingModule || overlapDecision.current) return;
         const trimmedName = newModuleName.trim();
         if (!trimmedName || !newModuleStart || !newModuleEnd) {
             window.alert("Please enter a module name, start date, and end date.");
@@ -851,11 +844,8 @@ export default function AdminModuleList() {
         }
 
         if (dateRangeOverlapsRanges(start, end, moduleConflictRanges)) {
-            window.alert(
-                "The selected dates overlap with an existing module. Please adjust your dates.",
-            );
             setOverlapError(true);
-            return;
+            if (!(await confirmOverlap())) return;
         }
 
         try {
@@ -892,6 +882,27 @@ export default function AdminModuleList() {
 
     return (
         <div className="projects-page">
+            {createPortal(
+                <dialog ref={overlapDialog} className="module-overlap-dialog"
+                    aria-labelledby="module-overlap-title" aria-describedby="module-overlap-description"
+                    onCancel={event => { event.preventDefault(); closeOverlapWarning(false); }}
+                    onClose={() => {
+                        setOverlapWarningOpen(false);
+                        overlapDecision.current?.(false);
+                        overlapDecision.current = null;
+                    }}>
+                    <span className="module-overlap-eyebrow">Schedule warning</span>
+                    <h2 id="module-overlap-title">These dates overlap</h2>
+                    <p id="module-overlap-description">
+                        This module overlaps with another module in this class. You can keep these dates
+                        and continue, or go back to adjust them.
+                    </p>
+                    <div className="module-overlap-actions">
+                        <button type="button" autoFocus onClick={() => closeOverlapWarning(false)}>Go back</button>
+                        <button type="button" className="module-overlap-continue"
+                            onClick={() => closeOverlapWarning(true)}>Continue anyway</button>
+                    </div>
+                </dialog>, document.body)}
             <Helmet>
                 <title>[Admin] MAAT</title>
             </Helmet>
@@ -929,19 +940,16 @@ export default function AdminModuleList() {
             </div>
 
             <div className="module-calendar-command-row">
-                <button
-                    className="button button-create-assignment"
-                    type="button"
-                    onClick={() => {
+                <DefaultContentImport key={classId} classId={classId} onImported={loadModules}
+                    createOpen={showCreateModule}
+                    onCreateCustom={() => {
                         cancelModuleEdit();
-                        setShowCreateModule((current) => !current);
+                        setShowCreateModule(true);
                     }}
-                >
-                    <FaPlusCircle aria-hidden="true" />
-                    <span className="button-text">
-                        {showCreateModule ? "Close create module" : "Create new module"}
-                    </span>
-                </button>
+                    onToggleCreate={() => {
+                        cancelModuleEdit();
+                        setShowCreateModule(current => !current);
+                    }} />
 
                 <div className="module-view-toggle" aria-label="Module view selector">
                     <button
