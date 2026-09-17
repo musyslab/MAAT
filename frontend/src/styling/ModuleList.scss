@@ -991,6 +991,14 @@
         }
     }
 
+    // Overlapping module dates are allowed after confirmation.
+    .datetime-field.input-error {
+        input {
+            border-color: #d6a647 !important;
+            box-shadow: 0 0 0 3px rgba(214, 166, 71, 0.14) !important;
+        }
+    }
+
     .react-datepicker__day--highlighted-red {
         background-color: #b4b0b0 !important;
         color: #474040 !important;

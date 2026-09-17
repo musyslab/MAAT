@@ -17,7 +17,6 @@ import AdminClassSelect from './pages/admin/AdminClassSelect';
 import AdminMenu from './pages/admin/AdminMenu';
 import AdminAnalyticsDashboard from './pages/admin/AdminAnalyticsDashboard';
 import AdminGrading from './pages/admin/AdminGrading';
-import AdminPlagiarism from "./pages/admin/AdminPlagiarism";
 import AdminModuleList from './pages/admin/AdminModuleList';
 import AdminModuleDetails from './pages/admin/AdminModuleDetails';
 import AdminOfficeHours from './pages/admin/AdminOfficeHours';
@@ -238,11 +237,6 @@ class App extends Component {
                     <Route path="/admin/:class_id/project/:project_id/checkpoint/:checkpoint_id/codeview/:id" element={
                         <ProtectedRoute>
                             <AdminViewStudentCode />
-                        </ProtectedRoute>
-                    } />
-                    <Route path="/admin/plagiarism" element={
-                        <ProtectedRoute>
-                            <AdminPlagiarism />
                         </ProtectedRoute>
                     } />
                     <Route path="/student/school/:school_id/classes" element={

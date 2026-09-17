@@ -12,6 +12,7 @@ from flask import request
 from flask import make_response
 from http import HTTPStatus
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from math import ceil
 from dependency_injector.wiring import inject, Provide
 from sqlalchemy import func
@@ -37,6 +38,16 @@ from src.repositories.project_repository import ProjectRepository
 from src.repositories.database import db
 from src.repositories.submission_repository import SubmissionRepository
 from src.repositories.user_repository import UserRepository
+
+CHICAGO_TIMEZONE = ZoneInfo("America/Chicago")
+
+
+def submission_datetime_utc(value: datetime) -> datetime:
+    """Convert stored Chicago wall time to naive UTC for cooldown comparisons."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=CHICAGO_TIMEZONE)
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
 
 upload_api = Blueprint("upload_api", __name__)
 
@@ -239,11 +250,7 @@ def consume_pending_cooldown_skip(
     )
 
     if latest_submission_time is not None:
-        submission_time_utc = (
-            latest_submission_time.astimezone(timezone.utc).replace(tzinfo=None)
-            if latest_submission_time.tzinfo is not None
-            else latest_submission_time.astimezone().astimezone(timezone.utc).replace(tzinfo=None)
-        )
+        submission_time_utc = submission_datetime_utc(latest_submission_time)
         query = query.filter(StudentCooldownSkips.CreatedAt >= submission_time_utc)
 
     row = query.order_by(StudentCooldownSkips.CreatedAt.asc()).first()
@@ -616,14 +623,24 @@ def load_grader_status(json_out: str) -> tuple[bool, dict]:
 
 
 def parse_submission_datetime(value) -> datetime | None:
+    """Return Chicago wall time, matching the existing naive submission column."""
     if isinstance(value, datetime):
-        return value
+        return value.astimezone(CHICAGO_TIMEZONE).replace(tzinfo=None) if value.tzinfo else value
 
     raw = str(value or "").strip()
     if not raw:
         return None
 
-    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(raw)
+        return parsed.astimezone(CHICAGO_TIMEZONE).replace(tzinfo=None) if parsed.tzinfo else parsed
+    except ValueError:
+        pass
+
+    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%m/%d/%y %H:%M:%S"):
         try:
             return datetime.strptime(raw[:19], fmt)
         except ValueError:
@@ -758,7 +775,10 @@ def student_submission_cooldown_response(
         completed_attempts,
         is_checkpoint,
     )
-    elapsed_seconds = (datetime.now() - submitted_at).total_seconds()
+    elapsed_seconds = (
+        datetime.now(timezone.utc).replace(tzinfo=None)
+        - submission_datetime_utc(submitted_at)
+    ).total_seconds()
     remaining_seconds = int(ceil(cooldown_seconds - elapsed_seconds))
 
     if remaining_seconds <= 0:
@@ -1533,7 +1553,8 @@ def file_upload(
                 HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
             )
 
-    ts_now = datetime.now()
+    # Store submission times and folder timestamps in Chicago, including DST.
+    ts_now = datetime.now(CHICAGO_TIMEZONE)
     ts_stamp = ts_now.strftime("%Y%m%d_%H%M%S")
     dt_string = ts_now.strftime("%Y/%m/%d %H:%M:%S")
 
