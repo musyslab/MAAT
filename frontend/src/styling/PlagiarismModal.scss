@@ -1,0 +1,561 @@
+// Install at frontend/src/styling/PlagiarismModal.scss.
+.plag-modal {
+    box-sizing: border-box;
+    width: min(1500px, 96vw);
+    max-width: 96vw;
+    max-height: 92vh;
+    margin: auto;
+    padding: 24px;
+    border: 1px solid #bbc7d4;
+    border-radius: 14px;
+    background: #fff;
+    color: #172638;
+    box-shadow: 0 20px 80px #0005;
+    overflow: auto;
+    font: 15px/1.5 system-ui, sans-serif;
+
+    &::backdrop {
+        background: #122238aa;
+        backdrop-filter: blur(3px);
+    }
+
+    *,
+    *::before,
+    *::after {
+        box-sizing: border-box;
+    }
+
+    header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+    }
+
+    h2,
+    h3 {
+        margin: 0 0 12px;
+        color: #18334d;
+    }
+
+    button {
+        cursor: pointer;
+        border: 1px solid #8ea9c3;
+        background: #eef5fc;
+        color: #173d65;
+        padding: 8px 13px;
+        border-radius: 7px;
+        font: inherit;
+    }
+
+    button:hover {
+        background: #dcecff;
+    }
+
+    button:disabled {
+        opacity: .55;
+        cursor: wait;
+    }
+
+    :focus-visible {
+        outline: 3px solid #276abb;
+        outline-offset: 2px;
+    }
+
+    select,
+    input,
+    textarea {
+        color: #172638;
+        background: white;
+        border: 1px solid #8c9eb3;
+        border-radius: 5px;
+        padding: 7px;
+        font: inherit;
+    }
+
+    summary {
+        cursor: pointer;
+        font-weight: 600;
+        margin: 10px 0;
+    }
+
+    .plag-notice {
+        padding: 12px 16px;
+        border-left: 4px solid #a66c00;
+        background: #fff6df;
+    }
+
+    .plag-error {
+        padding: 12px;
+        background: #ffe5e8;
+        color: #852d36;
+    }
+
+    .plag-warnings {
+        background: #fff6df;
+        padding: 12px 24px;
+    }
+
+    .plag-back {
+        margin-bottom: 18px;
+    }
+
+    .plag-filter {
+        display: grid;
+        grid-template-columns: minmax(200px, 1fr) auto minmax(220px, 1fr);
+        align-items: center;
+        gap: 12px 24px;
+        margin: 18px 0 12px;
+        padding: 16px 20px;
+        border: 1px solid #d5dfe9;
+        border-radius: 12px;
+        background: #f8fafc;
+
+        label {
+            display: block;
+            font-weight: 700;
+            color: #18334d;
+        }
+
+        .plag-filter-count {
+            font-size: 12px;
+            color: #52657a;
+        }
+
+        .plag-filter-presets {
+            display: flex;
+            gap: 4px;
+            padding: 4px;
+            border: 1px solid #d5dfe9;
+            border-radius: 9px;
+            background: #fff;
+
+            button {
+                padding: 6px 10px;
+                border: 0;
+                background: transparent;
+                white-space: nowrap;
+                font-size: 13px;
+            }
+
+            button:hover {
+                background: #edf3fa;
+            }
+
+            button[aria-pressed='true'] {
+                background: #224f80;
+                color: white;
+            }
+        }
+
+        .plag-filter-controls {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        input[type='range'] {
+            appearance: none;
+            flex: 1;
+            min-width: 60px;
+            width: 100%;
+            height: 6px;
+            border: 0;
+            border-radius: 10px;
+            padding: 0;
+            cursor: pointer;
+
+            &::-webkit-slider-thumb {
+                appearance: none;
+                width: 18px;
+                height: 18px;
+                border: 3px solid #fff;
+                border-radius: 50%;
+                background: #285f9e;
+                box-shadow: 0 0 0 1px #285f9e;
+            }
+
+            &::-moz-range-thumb {
+                width: 13px;
+                height: 13px;
+                border: 3px solid #fff;
+                border-radius: 50%;
+                background: #285f9e;
+                box-shadow: 0 0 0 1px #285f9e;
+            }
+        }
+
+        .plag-filter-value {
+            display: flex;
+            align-items: center;
+            padding-right: 10px;
+            border: 1px solid #b8c9da;
+            border-radius: 8px;
+            background: #fff;
+            font-weight: 700;
+            color: #224f80;
+
+            input {
+                width: 72px;
+                border: 0;
+                background: transparent;
+                text-align: right;
+                font-weight: 700;
+            }
+        }
+
+        p {
+            grid-column: 1 / -1;
+            margin: 0;
+            color: #52657a;
+            font-size: 12px;
+        }
+    }
+
+    .plag-score-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .plag-score {
+        display: inline-block;
+        padding: 4px 10px;
+        border: 1px solid var(--score-border);
+        border-radius: 7px;
+        background: var(--score-bg);
+        color: var(--score-text);
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .plag-score-low {
+        --score-bg: #fff5c2;
+        --score-text: #735500;
+        --score-border: #ddc660;
+    }
+
+    .plag-score-moderate {
+        --score-bg: #ffead5;
+        --score-text: #8a3b08;
+        --score-border: #e8b178;
+    }
+
+    .plag-score-high {
+        --score-bg: #ffe1e4;
+        --score-text: #a11b2b;
+        --score-border: #ed9ba5;
+    }
+
+    .plag-score-unavailable {
+        --score-bg: #edf1f5;
+        --score-text: #52657a;
+        --score-border: #c7d1dc;
+    }
+
+    .plag-results-scroll {
+        overflow: auto;
+    }
+
+    .plag-results {
+        border-collapse: collapse;
+        width: 100%;
+        text-align: left;
+
+        th,
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #dbe3eb;
+            white-space: nowrap;
+        }
+
+        th {
+            background: #eef3f8;
+        }
+
+        .plag-row-low {
+            background: #fffdf2;
+        }
+
+        .plag-row-moderate {
+            background: #fff7ef;
+        }
+
+        .plag-row-high {
+            background: #fff1f3;
+        }
+
+        .plag-row-unavailable {
+            background: #f7f9fb;
+        }
+
+        tbody tr:hover {
+            outline: 2px solid #8ea9c3;
+            outline-offset: -2px;
+        }
+
+        small {
+            display: block;
+            color: #52657a;
+        }
+
+        caption {
+            text-align: left;
+            padding: 10px 0;
+        }
+    }
+
+    .plag-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin: 10px 0;
+
+        div {
+            background: var(--score-bg);
+            color: var(--score-text);
+            border: 1px solid var(--score-border);
+            padding: 13px;
+            border-radius: 8px;
+        }
+
+        dt {
+            font-size: 13px;
+        }
+
+        dd {
+            font-size: 26px;
+            font-weight: 700;
+            margin: 4px 0 0;
+        }
+    }
+
+    .plag-file-selectors {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+
+        label {
+            min-width: 0;
+        }
+
+        select {
+            display: block;
+            width: 100%;
+            margin: 6px 0;
+        }
+    }
+
+    .plag-comparison-note,
+    .plag-code-help {
+        color: #52657a;
+        font-size: 13px;
+    }
+
+    .plag-code-help {
+        margin: 4px 0 10px;
+    }
+
+    .plag-match-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 14px;
+    }
+
+    .plag-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        font-size: 12px;
+    }
+
+    .plag-legend span::before {
+        content: '';
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        margin-right: 6px;
+        border-radius: 3px;
+    }
+
+    .plag-exact-key::before {
+        background: #32976c;
+    }
+
+    .plag-changed-key::before {
+        background: #b77916;
+    }
+
+    .plag-left-key::before { background: #bf4050; }
+    .plag-right-key::before { background: #337ab8; }
+
+    .plag-match-navigation {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        span {
+            min-width: 120px;
+            text-align: center;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        button {
+            padding: 3px 10px;
+            background: white;
+        }
+
+        button:disabled {
+            cursor: default;
+        }
+    }
+
+    .plag-code-panes {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 12px;
+    }
+
+    .plag-code-scroll {
+        overflow: auto;
+        height: 54vh;
+        min-height: 220px;
+        border: 1px solid #cbd7e3;
+        border-radius: 9px;
+        background: #fcfdff;
+    }
+
+    .plag-code {
+        border-collapse: separate;
+        border-spacing: 0;
+        min-width: 100%;
+        text-align: left;
+
+        th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #eef3f8;
+            color: #3b526b;
+            padding: 10px;
+            border-bottom: 1px solid #ccd9e6;
+            font-size: 12px;
+        }
+
+        td {
+            padding: 0 10px;
+            vertical-align: top;
+            height: 24px;
+        }
+
+        td:nth-child(2) {
+            border-left: 3px solid transparent;
+        }
+
+        .plag-line-number {
+            color: #718297;
+            background: #f3f6fa;
+            text-align: right;
+            width: 5ch;
+            font: 12px/24px monospace;
+            user-select: none;
+        }
+
+        .plag-code-line {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+        }
+
+        pre {
+            flex: 1;
+            margin: 0;
+            padding: 0;
+            font: 13px/24px ui-monospace, SFMono-Regular, Consolas, monospace;
+            tab-size: 4;
+            white-space: pre;
+            color: #21344a;
+            background: transparent;
+        }
+
+        .plag-text-same td:nth-child(2) {
+            background: #edf8f0;
+            border-left-color: #32976c;
+        }
+
+        .plag-text-changed td:nth-child(2) {
+            background: #fff7df;
+            border-left-color: #b77916;
+        }
+
+        .plag-text-left-only td:nth-child(2) {
+            background: #fcebed;
+            border-left-color: #bf4050;
+        }
+
+        .plag-text-right-only td:nth-child(2) {
+            background: #eaf3ff;
+            border-left-color: #337ab8;
+        }
+
+        .plag-placeholder td { background: #edf0f4; }
+        .plag-selected-change td { box-shadow: inset 0 2px #7756b5; }
+        .plag-change-symbol {
+            flex: 0 0 1ch;
+            color: #42536a;
+            font: bold 13px/24px monospace;
+            user-select: none;
+        }
+        mark {
+            color: inherit;
+            padding: 0;
+            border-radius: 2px;
+        }
+        .plag-inline-left { background: #ffc7cd; }
+        .plag-inline-right { background: #bcdcff; }
+    }
+
+    .plag-evidence {
+        margin-top: 18px;
+
+        li {
+            margin: 6px 0;
+        }
+    }
+
+    @media (max-width: 1100px) {
+        .plag-filter {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .plag-filter-controls {
+            grid-column: 1 / -1;
+        }
+    }
+
+    @media (max-width: 720px) {
+        padding: 14px;
+
+        .plag-filter {
+            grid-template-columns: 1fr;
+            padding: 14px;
+            gap: 12px;
+        }
+
+        .plag-filter-presets {
+            justify-self: start;
+        }
+
+        .plag-code-panes {
+            gap: 6px;
+        }
+
+        .plag-stats {
+            grid-template-columns: 1fr 1fr;
+        }
+    }
+}

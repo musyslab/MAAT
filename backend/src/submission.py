@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import os
 import re
 import threading
@@ -45,6 +46,16 @@ from src.repositories.models import (
     Testcases,
 )
 from src.repositories.database import db
+
+CHICAGO_TIMEZONE = ZoneInfo("America/Chicago")
+
+
+def submission_datetime_utc(value: datetime) -> datetime:
+    """Convert stored Chicago wall time to naive UTC for cooldown comparisons."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=CHICAGO_TIMEZONE)
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
 
 ui_clicks_log = "/tabot-files/project-files/code_view_clicks.log"
 
@@ -914,8 +925,9 @@ def incentive_payload(
 
 
 def parse_submission_datetime_for_cooldown(value) -> datetime | None:
+    """Return Chicago wall time, matching the existing naive submission column."""
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+        return value.astimezone(CHICAGO_TIMEZONE).replace(tzinfo=None) if value.tzinfo else value
 
     raw = str(value or "").strip()
     if not raw:
@@ -926,14 +938,14 @@ def parse_submission_datetime_for_cooldown(value) -> datetime | None:
 
     try:
         parsed = datetime.fromisoformat(raw)
-        return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
-    except Exception:
+        return parsed.astimezone(CHICAGO_TIMEZONE).replace(tzinfo=None) if parsed.tzinfo else parsed
+    except ValueError:
         pass
 
     for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%m/%d/%y %H:%M:%S"):
         try:
             return datetime.strptime(raw[:19], fmt)
-        except Exception:
+        except ValueError:
             pass
 
     return None
@@ -996,11 +1008,7 @@ def pending_cooldown_skip_exists(
     )
 
     if submitted_at is not None:
-        submitted_at_utc = (
-            submitted_at.astimezone(timezone.utc).replace(tzinfo=None)
-            if submitted_at.tzinfo is not None
-            else submitted_at.astimezone().astimezone(timezone.utc).replace(tzinfo=None)
-        )
+        submitted_at_utc = submission_datetime_utc(submitted_at)
         query = query.filter(StudentCooldownSkips.CreatedAt >= submitted_at_utc)
 
     return query.first() is not None
@@ -1066,10 +1074,10 @@ def submission_cooldown_state(
     cooldown_lifted_at = None
 
     if submitted_at is not None and cooldown_seconds > 0:
-        # Submission timestamps are written with datetime.now() in upload.py and
-        # stored without timezone information. Compare them with the same
-        # server-local clock, then return a real UTC deadline to the browser.
-        elapsed_seconds = (datetime.now() - submitted_at).total_seconds()
+        # Submission times are Chicago wall time; compare actual UTC instants.
+        elapsed_seconds = (
+            current_utc_datetime() - submission_datetime_utc(submitted_at)
+        ).total_seconds()
         remaining_seconds = max(
             0,
             int(cooldown_seconds - elapsed_seconds + 0.999),

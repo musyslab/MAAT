@@ -1,3 +1,4 @@
+# Replace backend/src/projects.py.
 import importlib.util
 import base64
 import html
@@ -2530,24 +2531,102 @@ def check_time_conflict(project_repo: ProjectRepository = Provide[Container.proj
 @projects_api.route('/run-plagiarism', methods=['POST'])
 @jwt_required()
 @inject
-def run_plagiarism(user_repo: UserRepository = Provide[Container.user_repo], submission_repo: SubmissionRepository = Provide[Container.submission_repo], project_repo: ProjectRepository = Provide[Container.project_repo]):
+def run_plagiarism(project_repo: ProjectRepository = Provide[Container.project_repo]):
+    """Latest submission per student, strictly within an authorized assignment."""
+    from flask import current_app
+    from src.services.plagiarism_service import (
+        AnalysisLimit, MAX_SUBMISSIONS, analyze_submissions, read_python_files,
+    )
+
+    def reply(payload, status=200):
+        response = make_response(jsonify(payload), status)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
     if not is_staff_user():
-        return access_denied_response()
-    
-    input_json = request.get_json()
-    projectid = input_json['project_id']
-    if not user_can_access_project_id(projectid):
-        return access_denied_response(HTTPStatus.FORBIDDEN)
+        return reply({'message': 'Staff access required.'}, 403)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return reply({'message': 'Expected a JSON object.'}, 400)
+    project_id = parse_int(body.get('project_id'), 0)
+    if project_id <= 0:
+        return reply({'message': 'A valid project_id is required.'}, 400)
+    if not user_can_access_project_id(project_id):
+        return reply({'message': 'Access denied for this assignment.'}, 403)
+    project = project_repo.get_selected_project(project_id)
+    if project is None:
+        return reply({'message': 'Assignment not found.'}, 404)
+    class_id = int(project.ClassId)
+    if 'class_id' in body and parse_int(body['class_id'], 0) != class_id:
+        return reply({'message': 'Assignment does not belong to this class.'}, 400)
+    checkpoint = body.get('checkpoint', False)
+    rename = body.get('rename_identifiers', True)
+    if not isinstance(checkpoint, bool) or not isinstance(rename, bool):
+        return reply({'message': 'checkpoint and rename_identifiers must be booleans.'}, 400)
+    checkpoint_id = parse_int(body.get('checkpoint_id'), 0)
+    if checkpoint:
+        if checkpoint_id <= 0 or Checkpoints.query.filter(
+            Checkpoints.Id == checkpoint_id, Checkpoints.ProjectId == project_id,
+        ).first() is None:
+            return reply({'message': 'Select a valid checkpoint belonging to this assignment.'}, 400)
+    elif checkpoint_id:
+        return reply({'message': 'checkpoint_id requires checkpoint=true.'}, 400)
+    starter = body.get('starter_code', '')
+    if not isinstance(starter, str):
+        return reply({'message': 'starter_code must be a string.'}, 400)
+    selected_ids = body.get('student_ids')
+    if selected_ids is not None and (not isinstance(selected_ids, list)
+            or len(selected_ids) > 2000
+            or any(type(uid) is not int or uid <= 0 for uid in selected_ids)):
+        return reply({'message': 'student_ids must be an array of positive integer IDs.'}, 400)
 
-    # Fetch language from projects DB and pass it through
-    proj = project_repo.get_selected_project(projectid)
-    language = getattr(proj, "Language", "") if proj else ""
+    # Filter current students before ranking: never include instructors, another
+    # assignment, another checkpoint, or a historical submission by accident.
+    eligible = db.session.query(ClassAssignments.UserId).filter(
+        ClassAssignments.ClassId == class_id, ClassAssignments.Role == STUDENT_ROLE,
+    )
+    scope = [Submissions.Project == project_id, Submissions.User.in_(eligible),
+             Submissions.IsCheckpoint == checkpoint]
+    if checkpoint:
+        scope.append(Submissions.CheckpointId == checkpoint_id)
+    if selected_ids is not None:
+        scope.append(Submissions.User.in_(selected_ids))
+    ranked = db.session.query(
+        Submissions.Id.label('submission_id'),
+        func.row_number().over(partition_by=Submissions.User,
+                               order_by=(Submissions.Time.desc(), Submissions.Id.desc())).label('position'),
+    ).filter(*scope).subquery()
+    rows = db.session.query(Submissions, Users).join(
+        ranked, ranked.c.submission_id == Submissions.Id,
+    ).join(Users, Users.Id == Submissions.User).filter(
+        ranked.c.position == 1,
+    ).order_by(Submissions.Id).limit(MAX_SUBMISSIONS + 1).all()
+    if len(rows) > MAX_SUBMISSIONS:
+        return reply({'message': f'Limit is {MAX_SUBMISSIONS} submitted students. Narrow the lecture/lab filters and retry.'}, 413)
+    snapshots, skipped = [], []
+    for submission, user in rows:
+        identity = {'id': int(submission.Id), 'user_id': int(user.Id),
+                    'name': f'{user.Firstname or ""} {user.Lastname or ""}'.strip() or f'User {user.Id}'}
+        try:
+            files = read_python_files(submission.CodeFilepath, current_app.config['STUDENT_FILES_DIR'])
+            snapshots.append({**identity, 'files': files, 'warnings': []})
+        except (OSError, UnicodeError, ValueError, SyntaxError) as exc:
+            # Do not expose absolute server paths or raw filesystem errors.
+            reason = str(exc) if isinstance(exc, AnalysisLimit) else 'Python source is missing, unreadable, incorrectly encoded, or outside the allowed directory.'
+            skipped.append({**identity, 'reason': reason})
+    try:
+        report = analyze_submissions(snapshots, rename=rename, starter_code=starter)
+    except AnalysisLimit as exc:
+        return reply({'message': str(exc)}, 413)
+    except (ValueError, RecursionError) as exc:
+        return reply({'message': 'Unable to analyze the supplied starter code. Check its syntax and size.'}, 400)
+    report['skipped'].extend(skipped)
+    report['submitted_count'] = len(rows)
+    report['scope'] = {'project_id': project_id, 'class_id': class_id,
+                       'checkpoint_id': checkpoint_id if checkpoint else None,
+                       'selection': 'visible roster' if selected_ids is not None else 'whole assignment'}
+    return reply(report)
 
-    from src.services.dataService import run_local_plagiarism
-    result = run_local_plagiarism(projectid, submission_repo, user_repo, project_repo, language=language)
-
-    return make_response(result, HTTPStatus.OK)
-    
 @projects_api.route('/projects-by-user', methods=['GET'])
 @jwt_required()
 @inject
