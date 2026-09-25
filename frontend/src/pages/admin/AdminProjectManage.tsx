@@ -344,31 +344,6 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         setMainJavaFileName(pickMainJavaFile(javaNames, withMain))
     }
 
-    async function loadServerSolutionFiles() {
-        try {
-            const res = await axios.get(
-                import.meta.env.VITE_API_URL +
-                `/projects/list_solution_files?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
-
-                { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
-            )
-            const names = Array.isArray(res.data) ? res.data : []
-            setServerSolutionFileNames(names)
-            setServerSolutionFileNamesSnapshot(names)
-        } catch (e) {
-            console.log(e)
-            setServerSolutionFileNames([])
-            setServerSolutionFileNamesSnapshot([])
-        }
-    }
-
-    useEffect(() => {
-        if (edit && project_id > 0) {
-            loadServerSolutionFiles()
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [edit, project_id, isPractice])
-
     useEffect(() => {
         let cancelled = false
             ; (async () => {
@@ -461,20 +436,6 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         return ProjectLanguage
     })()
 
-    async function fetchServerFileList(): Promise<string[]> {
-
-        const res = await fetch(
-            `${API}/projects/list_source_files?project_id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
-            { headers: authHeader }
-        )
-
-        if (!res.ok) return []
-        const data = await res.json()
-        const list = data.files.map((f: any) => f.relpath)
-        setServerFiles(list)
-        return list
-    }
-
     async function openServerPreview(relpath?: string) {
         const url = new URL(`${API}/projects/get_source_file`)
         url.searchParams.set('project_id', String(project_id))
@@ -490,12 +451,6 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         setPreviewText(text)
         setPreviewOpen(true)
     }
-
-    useEffect(() => {
-        if (edit && project_id > 0) {
-            fetchServerFileList()
-        }
-    }, [edit, project_id, isPractice])
 
     const defaultStart = (() => {
         const d = new Date()
@@ -525,7 +480,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         const fetchProjects = async () => {
             try {
                 const response = await axios.get(
-                    `${import.meta.env.VITE_API_URL}/projects/get_projects_by_class_id?id=${classId}`,
+                    `${import.meta.env.VITE_API_URL}/projects/get_projects_by_class_id?id=${classId}&dates_only=true`,
                     {
                         headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
                     }
@@ -657,7 +612,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             resetForSwitch()
 
             try {
-                const [tcRes, projRes] = await Promise.all([
+                const [tcRes, projRes, filesRes, solutionsRes] = await Promise.all([
                     axios.get(
                         `${import.meta.env.VITE_API_URL}/projects/get_testcases?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
                         { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
@@ -666,6 +621,14 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
                         `${import.meta.env.VITE_API_URL}/projects/get_project_id?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
                         { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
                     ),
+                    axios.get(
+                        `${API}/projects/list_source_files?project_id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
+                        { headers: authHeader }
+                    ).catch(() => ({ data: { files: [] } })),
+                    axios.get(
+                        `${API}/projects/list_solution_files?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
+                        { headers: authHeader }
+                    ).catch(() => ({ data: [] })),
                 ])
 
                 if (cancelled) return
@@ -724,9 +687,13 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
                     setSubmitButton('Submit file changes')
                 }
 
-                // Ensure filesystem/solution lists match the newly loaded (project_id, practice) state
-                await fetchServerFileList()
-                await loadServerSolutionFiles()
+                const fileList = Array.isArray(filesRes.data?.files)
+                    ? filesRes.data.files.map((file: { relpath: string }) => file.relpath)
+                    : []
+                const solutionNames = Array.isArray(solutionsRes.data) ? solutionsRes.data : []
+                setServerFiles(fileList)
+                setServerSolutionFileNames(solutionNames)
+                setServerSolutionFileNamesSnapshot(solutionNames)
 
             } catch (err) {
                 console.log(err)

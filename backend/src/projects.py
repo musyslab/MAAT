@@ -1,4 +1,3 @@
-# Replace backend/src/projects.py.
 import importlib.util
 import base64
 import html
@@ -3395,9 +3394,16 @@ def get_testcases(project_repo: ProjectRepository = Provide[Container.project_re
         and INPUT_EVENT_PREFIX in str(values[3] or "")
         for values in testcases.values()
     )
-    if testcases and not has_input_event:
+    # Default imports already store their validated testcase output. Their
+    # canonical solution files are shared by classes, and may never produce an
+    # input marker; rerunning every testcase here would repeat on every visit.
+    solution_root = project_repo.get_project_path(int(project_id), checkpoint_id=ppid) if testcases else None
+    default_root = os.path.realpath(project_repo.DEFAULT_ROOT)
+    is_default_import = bool(solution_root and os.path.commonpath(
+        (default_root, os.path.realpath(solution_root))
+    ) == default_root)
+    if testcases and not has_input_event and not is_default_import:
         try:
-            solution_root = project_repo.get_project_path(int(project_id), checkpoint_id=ppid)
             project = project_repo.get_selected_project(int(project_id))
             if ppid:
                 checkpoint = project_repo.get_checkpoint(int(ppid))
@@ -4244,6 +4250,15 @@ def get_projects_by_class_id(project_repo: ProjectRepository = Provide[Container
     if not user_can_access_class_id(parse_int(class_id, 0)):
         return access_denied_response(HTTPStatus.FORBIDDEN)
     data = project_repo.get_projects_by_class_id(class_id)
+
+    # Project Manage only needs assignment dates for overlap highlighting.
+    # Avoid submission aggregates for this request; those span all projects.
+    if request.args.get('dates_only') == 'true':
+        return jsonify([json.dumps({
+            'Id': proj.Id,
+            'Start': project_start(proj).strftime('%x %X') if project_start(proj) else '',
+            'End': project_end(proj).strftime('%x %X') if project_end(proj) else '',
+        }) for proj in data])
     
     new_projects = []
     thisdic = submission_repo.get_total_submission_for_all_projects()
