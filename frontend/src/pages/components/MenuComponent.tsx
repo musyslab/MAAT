@@ -1,3 +1,4 @@
+// MenuComponent.tsx: Renders the menu component interface and coordinates its local data and interactions.
 import { Component } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
@@ -9,15 +10,7 @@ import {
 import maatLogo from "../../images/MAAT.png";
 import "../../styling/MenuComponent.scss";
 
-interface MenuComponentProps {
-    showUpload: boolean;
-    showAdminUpload: boolean;
-    showHelp: boolean;
-    showCreate: boolean;
-    showReviewButton: boolean;
-    showLast: boolean;
-}
-
+// Reads the stored login token and rejects placeholder or missing values.
 const getValidStoredToken = (): string | null => {
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
@@ -39,7 +32,7 @@ const getValidStoredToken = (): string | null => {
     return cleanedToken;
 };
 
-class MenuComponent extends Component<MenuComponentProps> {
+class MenuComponent extends Component {
     handleLogout = () => {
         localStorage.removeItem("AUTOTA_AUTH_TOKEN");
         window.location.replace("/login");
@@ -58,7 +51,7 @@ class MenuComponent extends Component<MenuComponentProps> {
         }
 
         axios
-            .get(`${import.meta.env.VITE_API_URL}/auth/access-summary`, {
+            .get(`${import.meta.env.VITE_API_URL}/auth/access_summary`, {
                 headers: {
                     Authorization: `Bearer ${token}`,
                 },
@@ -72,17 +65,10 @@ class MenuComponent extends Component<MenuComponentProps> {
             });
     };
 
-    getClassIdFromUrl(): string | null {
-        const nestedMatch = window.location.pathname.match(/^\/student\/school\/\d+\/class\/(\d+)(?:\/|$)/);
-        if (nestedMatch) return nestedMatch[1];
-
-        const legacyMatch = window.location.pathname.match(/^\/student\/(\d+)(?:\/|$)/);
-        return legacyMatch ? legacyMatch[1] : null;
-    }
-
     render() {
         const isLoggedIn = Boolean(getValidStoredToken());
 
+        // Renders the interface using the current data and interaction state.
         return (
             <nav className="menu menu--top menu--inverted menu--borderless menu--huge">
                 <div className="menu__container">

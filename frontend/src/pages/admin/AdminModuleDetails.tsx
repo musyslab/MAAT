@@ -1,3 +1,4 @@
+// AdminModuleDetails.tsx: Manages a module overview, its main project, checkpoints, and presentation files.
 import {
     useCallback,
     useEffect,
@@ -34,6 +35,7 @@ import MenuComponent from "../components/MenuComponent";
 import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs";
 import "../../styling/AdminModuleDetails.scss";
 
+// Describes the module object data expected by this file.
 interface ModuleObject {
     Id: number;
     ClassId: number;
@@ -45,6 +47,7 @@ interface ModuleObject {
     PresentationFileName?: string;
 }
 
+// Describes the class access response data expected by this file.
 interface ClassAccessResponse {
     id?: number;
     name?: string;
@@ -52,6 +55,7 @@ interface ClassAccessResponse {
     school_name?: string;
 }
 
+// Describes the project object data expected by this file.
 interface ProjectObject {
     Id: number;
     Name: string;
@@ -65,6 +69,7 @@ interface ProjectObject {
     TestcaseCount?: number;
 }
 
+// Describes the practice problem row data expected by this file.
 type PracticeProblemRow = {
     id: number;
     number: number;
@@ -76,12 +81,14 @@ type PracticeProblemRow = {
     testcaseCount?: number;
 };
 
+// Describes the project setup status data expected by this file.
 type ProjectSetupStatus = {
     hasSolutionProgram: boolean;
     hasTestcases: boolean;
     testcaseCount: number;
 };
 
+// Describes the module overview response data expected by this file.
 type ModuleOverviewResponse = {
     module: ModuleObject;
     project: ProjectObject;
@@ -89,22 +96,26 @@ type ModuleOverviewResponse = {
     practiceProblems?: PracticeProblemRow[];
 };
 
+// Describes the path segment data expected by this file.
 type PathSegment = {
     key: string;
     d: string;
     state: "complete" | "missing" | "incomplete";
 };
 
+// Describes the path svg state data expected by this file.
 type PathSvgState = {
     width: number;
     height: number;
     segments: PathSegment[];
 };
 
+// Builds the authorization header used by authenticated API requests.
 const authHeader = () => ({
     Authorization: `Bearer ${localStorage.getItem("AUTOTA_AUTH_TOKEN")}`,
 });
 
+// Downloads the returned file data using the server filename or a fallback.
 const downloadBlobResponse = (res: any, fallbackName: string) => {
     const type =
         (res.headers as any)["content-type"] || "application/octet-stream";
@@ -121,6 +132,7 @@ const downloadBlobResponse = (res: any, fallbackName: string) => {
     URL.revokeObjectURL(url);
 };
 
+// Identifies assignment setup items that still need to be supplied.
 const getSetupMissingItems = (status: ProjectSetupStatus): string[] => {
     const missingItems: string[] = [];
 
@@ -135,18 +147,22 @@ const getSetupMissingItems = (status: ProjectSetupStatus): string[] => {
     return missingItems;
 };
 
+// Returns setup state for this view.
 const getSetupState = (status: ProjectSetupStatus): "complete" | "missing" =>
     getSetupMissingItems(status).length === 0 ? "complete" : "missing";
 
+// Formats missing setup text for this view.
 const formatMissingSetupText = (missingItems: string[]): string => {
     if (missingItems.length === 0) return "";
 
     return `Missing ${missingItems.join(" + ")}`;
 };
 
+// Returns default checkpoint name for this view.
 const getDefaultCheckpointName = (number: number): string =>
     `Checkpoint ${number}`;
 
+// Normalizes checkpoint rows for this view.
 const normalizeCheckpointRows = (
     rows: PracticeProblemRow[],
 ): PracticeProblemRow[] =>
@@ -160,7 +176,9 @@ const normalizeCheckpointRows = (
         };
     });
 
+// Manages a module overview, its main project, checkpoints, and presentation files.
 export default function AdminModuleDetails() {
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id, class_id, id, module_id } = useParams<{
         school_id: string;
         class_id: string;
@@ -173,6 +191,7 @@ export default function AdminModuleDetails() {
     const routeProjectId = Number(id || 0);
     const routeModuleId = Number(module_id || 0);
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [className, setClassName] = useState("");
     const [module, setModule] = useState<ModuleObject | null>(null);
     const [project, setProject] = useState<ProjectObject | null>(null);
@@ -184,8 +203,10 @@ export default function AdminModuleDetails() {
     const [switchingPresentation, setSwitchingPresentation] = useState(false);
     const [savingPresentation, setSavingPresentation] = useState(false);
     const [presentationMessage, setPresentationMessage] = useState("");
+    // Keeps presentation input ref available across renders without triggering a state update.
     const presentationInputRef = useRef<HTMLInputElement | null>(null);
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [mainProjectNameDraft, setMainProjectNameDraft] = useState("");
     const [practiceNameDrafts, setPracticeNameDrafts] = useState<
         Record<number, string>
@@ -221,8 +242,10 @@ export default function AdminModuleDetails() {
         number | null
     >(null);
 
+    // Keeps checkpoint path track ref available across renders without triggering a state update.
     const checkpointPathTrackRef = useRef<HTMLDivElement | null>(null);
 
+    // Formats date12h for this view.
     const formatDate12h = (value: string): string => {
         const d = new Date(value);
         if (Number.isNaN(d.getTime())) return value;
@@ -237,6 +260,7 @@ export default function AdminModuleDetails() {
         }).format(d);
     };
 
+    // Returns module status for this view.
     const getModuleStatus = (
         m: ModuleObject,
     ): "active" | "upcoming" | "ended" => {
@@ -249,6 +273,7 @@ export default function AdminModuleDetails() {
         return now < startMs ? "upcoming" : "ended";
     };
 
+    // Helper for hydrate state used by this component.
     const hydrateState = (
         nextModule: ModuleObject | null,
         nextProject: ProjectObject | null,
@@ -281,6 +306,7 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Loads class name for this view.
     const loadClassName = async (): Promise<void> => {
         if (!schoolId || !classId) {
             setClassName("");
@@ -288,8 +314,9 @@ export default function AdminModuleDetails() {
         }
 
         try {
+            // Fetches the server data needed for this operation.
             const res = await axios.get<ClassAccessResponse>(
-                `${import.meta.env.VITE_API_URL}/class/id/${classId}/access`,
+                `${import.meta.env.VITE_API_URL}/classes/validate_class_access/${classId}`,
                 {
                     headers: authHeader(),
                     params: {
@@ -306,6 +333,7 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Loads overview for this view.
     const loadOverview = async (showPageLoading = true): Promise<boolean> => {
         if (!classId || (!routeModuleId && !routeProjectId)) {
             hydrateState(null, null, []);
@@ -318,10 +346,11 @@ export default function AdminModuleDetails() {
         }
 
         const url = routeModuleId
-            ? `${import.meta.env.VITE_API_URL}/projects/get_module_overview?module_id=${routeModuleId}`
-            : `${import.meta.env.VITE_API_URL}/projects/get_module_overview?project_id=${routeProjectId}`;
+            ? `${import.meta.env.VITE_API_URL}/assignment_tracking/get_module_overview?module_id=${routeModuleId}`
+            : `${import.meta.env.VITE_API_URL}/assignment_tracking/get_module_overview?project_id=${routeProjectId}`;
 
         try {
+            // Fetches the server data needed for this operation.
             const res = await axios.get(url, { headers: authHeader() });
             const data = res.data as ModuleOverviewResponse;
             const rows = Array.isArray(data.checkpoints)
@@ -355,6 +384,7 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Saves presentation for this view.
     const savePresentation = async (): Promise<void> => {
         if (!module || !presentationFile || savingPresentation) return;
 
@@ -365,8 +395,9 @@ export default function AdminModuleDetails() {
         try {
             setSavingPresentation(true);
             setPresentationMessage("");
+            // Sends this operation and its payload to the server.
             const res = await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/module_presentation`,
+                `${import.meta.env.VITE_API_URL}/assignment_materials/save_module_presentation`,
                 formData,
                 { headers: authHeader() },
             );
@@ -401,12 +432,14 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Downloads presentation for this view.
     const downloadPresentation = async (): Promise<void> => {
         if (!module?.HasPresentation) return;
 
         try {
+            // Fetches the server data needed for this operation.
             const res = await axios.get(
-                `${import.meta.env.VITE_API_URL}/projects/module_presentation`,
+                `${import.meta.env.VITE_API_URL}/assignment_materials/get_module_presentation`,
                 {
                     headers: authHeader(),
                     params: { module_id: module.Id },
@@ -424,12 +457,14 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         void loadClassName();
         void loadOverview();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [schoolId, classId, routeProjectId, routeModuleId]);
 
+    // Recomputes sorted checkpoints only when its dependencies change.
     const sortedCheckpoints = useMemo(() => {
         return [...practiceProblems].sort((a, b) => {
             if (a.number !== b.number) return a.number - b.number;
@@ -448,12 +483,14 @@ export default function AdminModuleDetails() {
     const checkpointModalBusy =
         savingCheckpointOrder || addingCheckpoint || deletingCheckpointId !== null;
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (checkpointManagerOpen && !checkpointOrderChanged) {
             setCheckpointDrafts(sortedCheckpoints);
         }
     }, [checkpointManagerOpen, checkpointOrderChanged, sortedCheckpoints]);
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (!checkpointManagerOpen) return;
 
@@ -474,12 +511,14 @@ export default function AdminModuleDetails() {
         };
     }, [checkpointManagerOpen]);
 
+    // Recomputes main project ready only when its dependencies change.
     const mainProjectReady = useMemo(() => {
         return (
             !!project?.HasSolutionProgram && Number(project?.TestcaseCount || 0) >= 1
         );
     }, [project]);
 
+    // Recomputes path node states only when its dependencies change.
     const pathNodeStates = useMemo<
         ("complete" | "missing" | "incomplete")[]
     >(() => {
@@ -504,6 +543,7 @@ export default function AdminModuleDetails() {
         ];
     }, [sortedCheckpoints, project]);
 
+    // Keeps the recalculate path connectors callback stable until its dependencies change.
     const recalculatePathConnectors = useCallback(() => {
         const trackElement = checkpointPathTrackRef.current;
 
@@ -616,6 +656,7 @@ export default function AdminModuleDetails() {
         module?.Id,
     ]);
 
+    // Saves main project name for this view.
     const saveMainProjectName = async () => {
         if (!project) return;
 
@@ -628,7 +669,7 @@ export default function AdminModuleDetails() {
         try {
             setSavingProjectName(true);
             await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/update_project_name`,
+                `${import.meta.env.VITE_API_URL}/assignment_setup/update_project_name`,
                 {
                     project_id: project.Id,
                     name: trimmed,
@@ -647,12 +688,14 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Cancels main project edit for this view.
     const cancelMainProjectEdit = () => {
         if (!project) return;
         setMainProjectNameDraft(project.Name);
         setEditingMainProjectName(false);
     };
 
+    // Helper for begin practice name edit used by this component.
     const beginPracticeNameEdit = (
         practiceProblemId: number,
         currentName: string,
@@ -667,6 +710,7 @@ export default function AdminModuleDetails() {
         }));
     };
 
+    // Cancels practice name edit for this view.
     const cancelPracticeNameEdit = (
         practiceProblemId: number,
         currentName: string,
@@ -681,6 +725,7 @@ export default function AdminModuleDetails() {
         }));
     };
 
+    // Saves practice problem name for this view.
     const savePracticeProblemName = async (practiceProblemId: number) => {
         const trimmed = (practiceNameDrafts[practiceProblemId] || "").trim();
         if (!trimmed) {
@@ -691,7 +736,7 @@ export default function AdminModuleDetails() {
         try {
             setSavingPracticeNameId(practiceProblemId);
             await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/update_checkpoint_name`,
+                `${import.meta.env.VITE_API_URL}/assignment_setup/update_checkpoint_name`,
                 {
                     checkpoint_id: practiceProblemId,
                     name: trimmed,
@@ -721,11 +766,13 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Opens checkpoint manager for this view.
     const openCheckpointManager = () => {
         setCheckpointDrafts(sortedCheckpoints);
         setCheckpointManagerOpen(true);
     };
 
+    // Closes checkpoint manager for this view.
     const closeCheckpointManager = () => {
         if (checkpointModalBusy) return;
 
@@ -742,6 +789,7 @@ export default function AdminModuleDetails() {
         setCheckpointManagerOpen(false);
     };
 
+    // Moves a checkpoint within the draft order before that order is saved.
     const reorderCheckpointDrafts = (draggedId: number, targetId: number) => {
         if (draggedId === targetId || checkpointModalBusy) return;
 
@@ -760,11 +808,13 @@ export default function AdminModuleDetails() {
         });
     };
 
+    // Helper for finish checkpoint drag used by this component.
     const finishCheckpointDrag = () => {
         setDraggedCheckpointId(null);
         setDragOverCheckpointId(null);
     };
 
+    // Persists the reordered checkpoint list to the server.
     const saveCheckpointOrder = async () => {
         if (!project || !checkpointOrderChanged) return;
 
@@ -773,7 +823,7 @@ export default function AdminModuleDetails() {
             const orderedIds = checkpointDrafts.map((pp) => pp.id);
 
             await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/reorder_checkpoints`,
+                `${import.meta.env.VITE_API_URL}/assignment_setup/reorder_checkpoints`,
                 {
                     project_id: project.Id,
                     ordered_ids: orderedIds,
@@ -809,6 +859,7 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Adds checkpoint for this view.
     const addCheckpoint = async () => {
         if (!project) return;
 
@@ -818,7 +869,7 @@ export default function AdminModuleDetails() {
         try {
             setAddingCheckpoint(true);
             await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/create_checkpoint`,
+                `${import.meta.env.VITE_API_URL}/assignment_setup/create_checkpoint`,
                 {
                     project_id: project.Id,
                     name: generatedName,
@@ -841,6 +892,7 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Deletes checkpoint for this view.
     const deleteCheckpoint = async (
         practiceProblemId: number,
         checkpointName: string,
@@ -861,7 +913,7 @@ export default function AdminModuleDetails() {
         try {
             setDeletingCheckpointId(practiceProblemId);
             await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/delete_checkpoint`,
+                `${import.meta.env.VITE_API_URL}/assignment_setup/delete_checkpoint`,
                 {
                     checkpoint_id: practiceProblemId,
                 },
@@ -892,9 +944,11 @@ export default function AdminModuleDetails() {
         }
     };
 
+    // Formats testcase count for this view.
     const formatTestcaseCount = (count: number): string =>
         `${count} testcase${count === 1 ? "" : "s"}`;
 
+    // Renders setup indicators for this view.
     const renderSetupIndicators = (
         status: ProjectSetupStatus,
         manageUrl: string,
@@ -932,6 +986,7 @@ export default function AdminModuleDetails() {
             },
         ];
 
+        // Renders the interface using the current data and interaction state.
         return (
             <div
                 className="project-setup-indicators"
@@ -973,19 +1028,16 @@ export default function AdminModuleDetails() {
     };
 
     if (loading) {
+        // Renders the interface using the current data and interaction state.
         return (
             <div className="project-detail-page">
+                {/* Sets the page title and document metadata. */}
                 <Helmet>
                     <title>[Admin] MAAT</title>
                 </Helmet>
 
+                {/* Displays the navigation and actions available on this page. */}
                 <MenuComponent
-                    showUpload={false}
-                    showAdminUpload={true}
-                    showHelp={false}
-                    showCreate={false}
-                    showLast={false}
-                    showReviewButton={false}
                 />
 
                 <div className="project-detail-loading">Loading module path...</div>
@@ -994,21 +1046,19 @@ export default function AdminModuleDetails() {
     }
 
     if (!module || !project) {
+        // Renders the interface using the current data and interaction state.
         return (
             <div className="project-detail-page">
+                {/* Sets the page title and document metadata. */}
                 <Helmet>
                     <title>[Admin] MAAT</title>
                 </Helmet>
 
+                {/* Displays the navigation and actions available on this page. */}
                 <MenuComponent
-                    showUpload={false}
-                    showAdminUpload={true}
-                    showHelp={false}
-                    showCreate={false}
-                    showLast={false}
-                    showReviewButton={false}
                 />
 
+                {/* Shows the current location and links back to parent pages. */}
                 <DirectoryBreadcrumbs
                     items={[
                         { label: "School Selection", to: "/schools" },
@@ -1039,21 +1089,19 @@ export default function AdminModuleDetails() {
     );
     const mainProjectHasMissingSetup = mainProjectMissingSetupItems.length > 0;
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div className="project-detail-page">
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>[Admin] MAAT</title>
             </Helmet>
 
+            {/* Displays the navigation and actions available on this page. */}
             <MenuComponent
-                showUpload={false}
-                showAdminUpload={true}
-                showHelp={false}
-                showCreate={false}
-                showLast={false}
-                showReviewButton={false}
             />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={[
                     { label: "School Selection", to: "/schools" },
@@ -1276,6 +1324,7 @@ export default function AdminModuleDetails() {
                             const hasMissingSetup = missingSetupItems.length > 0;
                             const checkpointReady = pp.enabled && !hasMissingSetup;
 
+                            // Renders the interface using the current data and interaction state.
                             return (
                                 <article
                                     className={[
@@ -1588,6 +1637,7 @@ export default function AdminModuleDetails() {
                                             dragOverCheckpointId === pp.id &&
                                             draggedCheckpointId !== pp.id;
 
+                                        // Renders the interface using the current data and interaction state.
                                         return (
                                             <article
                                                 className={[

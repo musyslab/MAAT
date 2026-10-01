@@ -1,3 +1,4 @@
+// AdminAnalyticsDashboard.tsx: Builds the class progress dashboard, including filters and module visibility controls.
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { Helmet } from "react-helmet";
@@ -22,13 +23,17 @@ import LoadingAnimation from "../components/LoadingAnimation";
 import "../../styling/Selection.scss";
 import "../../styling/AdminAnalyticsDashboard.scss";
 
+// Uses the API base URL configured for this deployment.
 const API_URL = import.meta.env.VITE_API_URL;
+const TEST_USER_ID = -1;
 
+// Describes the route params data expected by this file.
 type RouteParams = {
     school_id: string;
     class_id: string;
 };
 
+// Describes the class access response data expected by this file.
 type ClassAccessResponse = {
     id?: number;
     name?: string;
@@ -36,6 +41,7 @@ type ClassAccessResponse = {
     school_name?: string;
 };
 
+// Describes the raw module data expected by this file.
 type RawModule = {
     Id: number;
     ClassId: number;
@@ -46,6 +52,7 @@ type RawModule = {
     MainProjectName?: string;
 };
 
+// Describes the raw project data expected by this file.
 type RawProject = {
     Id: number;
     Name: string;
@@ -56,21 +63,18 @@ type RawProject = {
     ModuleId?: number | null;
 };
 
+// Describes the raw checkpoint data expected by this file.
 type RawCheckpoint = {
     id?: number;
-    Id?: number;
-    checkpointId?: number;
-    CheckpointId?: number;
     number?: number;
-    Number?: number;
     name?: string;
-    Name?: string;
     enabled?: boolean;
-    Enabled?: boolean;
 };
 
+// Describes the dashboard item kind data expected by this file.
 type DashboardItemKind = "main" | "checkpoint";
 
+// Describes the dashboard item data expected by this file.
 type DashboardItem = {
     id: string;
     kind: DashboardItemKind;
@@ -86,6 +90,7 @@ type DashboardItem = {
     shortLabel: string;
 };
 
+// Describes the student summary data expected by this file.
 type StudentSummary = {
     userId: number;
     firstName: string;
@@ -97,6 +102,7 @@ type StudentSummary = {
     isLocked: boolean;
 };
 
+// Describes the progress cell data expected by this file.
 type ProgressCell = {
     studentUserId: number;
     itemId: string;
@@ -109,6 +115,7 @@ type ProgressCell = {
     skipped: boolean;
 };
 
+// Describes the student progress row data expected by this file.
 type StudentProgressRow = StudentSummary & {
     cells: Record<string, ProgressCell>;
     completed: number;
@@ -117,14 +124,17 @@ type StudentProgressRow = StudentSummary & {
     percentComplete: number;
 };
 
+// Describes the sort mode data expected by this file.
 type SortMode = "last-asc" | "last-desc";
 
+// Describes the module visibility option data expected by this file.
 type ModuleVisibilityOption = {
     moduleId: number;
     moduleName: string;
     itemCount: number;
 };
 
+// Describes the analytics dashboard payload data expected by this file.
 type AnalyticsDashboardPayload = {
     modules: RawModule[];
     projects: RawProject[];
@@ -133,6 +143,7 @@ type AnalyticsDashboardPayload = {
     hiddenModulesByStudentId?: Record<string, unknown>;
 };
 
+// Builds the authorization headers, preserving an existing Bearer prefix.
 function authHeaders() {
     const rawToken = localStorage.getItem("AUTOTA_AUTH_TOKEN") || "";
     const token = rawToken.trim();
@@ -144,23 +155,13 @@ function authHeaders() {
     };
 }
 
-function parseMaybeJson<T>(value: unknown, fallback: T): T {
-    if (typeof value === "string") {
-        try {
-            return JSON.parse(value) as T;
-        } catch {
-            return fallback;
-        }
-    }
-
-    return (value as T) ?? fallback;
-}
-
+// Converts an unknown value to a finite number, using the fallback when conversion fails.
 function asNumber(value: unknown, fallback = 0): number {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+// Converts a present value to text and uses the fallback for null or undefined.
 function asString(value: unknown, fallback = ""): string {
     if (value === null || value === undefined) {
         return fallback;
@@ -169,11 +170,13 @@ function asString(value: unknown, fallback = ""): string {
     return String(value);
 }
 
+// Accepts only finite, positive submission IDs before building submission links.
 function isRealSubmissionId(value: unknown): boolean {
     const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed > 0;
+    return Number.isSafeInteger(parsed) && parsed > 0;
 }
 
+// Normalizes boolean, numeric, and string pass values; unknown values remain unset.
 function isPassingValue(value: unknown): boolean | null {
     if (
         value === true ||
@@ -198,6 +201,7 @@ function isPassingValue(value: unknown): boolean | null {
     return null;
 }
 
+// Formats date time for this view.
 function formatDateTime(value: string): string {
     if (!value || value === "N/A") {
         return "";
@@ -216,6 +220,7 @@ function formatDateTime(value: string): string {
     });
 }
 
+// Treats missing attempt counts as zero before calculating progress.
 function normalizeAttempts(value: unknown): number {
     if (value === "N/A" || value === null || value === undefined) {
         return 0;
@@ -224,6 +229,7 @@ function normalizeAttempts(value: unknown): number {
     return asNumber(value, 0);
 }
 
+// Builds checkpoint identifiers and labels, skipping entries without a valid ID.
 function normalizeCheckpoint(
     row: RawCheckpoint,
     index: number,
@@ -233,7 +239,7 @@ function normalizeCheckpoint(
     checkpointName: string;
 } | null {
     const checkpointId = asNumber(
-        row.id ?? row.Id ?? row.checkpointId ?? row.CheckpointId,
+        row.id,
         0,
     );
 
@@ -241,9 +247,9 @@ function normalizeCheckpoint(
         return null;
     }
 
-    const checkpointNumber = asNumber(row.number ?? row.Number, index + 1);
+    const checkpointNumber = asNumber(row.number, index + 1);
     const checkpointName = asString(
-        row.name ?? row.Name,
+        row.name,
         `Checkpoint ${checkpointNumber}`,
     );
 
@@ -254,6 +260,7 @@ function normalizeCheckpoint(
     };
 }
 
+// Converts positional API rows, including the legacy extra unsubmitted column.
 function normalizeStudentAndCell(
     userIdRaw: string,
     rawRow: unknown,
@@ -267,7 +274,7 @@ function normalizeStudentAndCell(
     }
 
     const userId = asNumber(userIdRaw, 0);
-    if (userId <= 0) {
+    if (userId <= 0 && userId !== TEST_USER_ID) {
         return null;
     }
 
@@ -280,19 +287,11 @@ function normalizeStudentAndCell(
     const passed = isPassingValue(rawRow[6]);
     const submissionId = isRealSubmissionId(rawRow[7]) ? asNumber(rawRow[7]) : null;
 
-    const rowHasSubmissionShape = submissionId !== null;
-    const grade = rowHasSubmissionShape
-        ? asString(rawRow[9], "0")
-        : asString(rawRow[10], "0");
-    const studentNumber = rowHasSubmissionShape
-        ? asString(rawRow[10])
-        : asString(rawRow[11]);
-    const isLocked = rowHasSubmissionShape
-        ? Boolean(rawRow[11])
-        : Boolean(rawRow[12]);
-    const skipped = rowHasSubmissionShape
-        ? Boolean(rawRow[12])
-        : Boolean(rawRow[13]);
+    const offset = rawRow[7] === "N/A" ? 1 : 0;
+    const grade = asString(rawRow[9 + offset], "0");
+    const studentNumber = asString(rawRow[10 + offset]);
+    const isLocked = isPassingValue(rawRow[11 + offset]) === true;
+    const skipped = isPassingValue(rawRow[12 + offset]) === true;
 
     return {
         student: {
@@ -319,6 +318,7 @@ function normalizeStudentAndCell(
     };
 }
 
+// Classifies assignment progress as skipped, complete, attempted, or not started.
 function cellStatus(
     cell: ProgressCell | undefined,
 ): "complete" | "skipped" | "in-progress" | "not-started" {
@@ -341,6 +341,7 @@ function cellStatus(
     return "in-progress";
 }
 
+// Helper for status label used by this component.
 function statusLabel(status: ReturnType<typeof cellStatus>): string {
     if (status === "complete") {
         return "Complete";
@@ -357,19 +358,27 @@ function statusLabel(status: ReturnType<typeof cellStatus>): string {
     return "Not started";
 }
 
+// Helper for status icon used by this component.
 function statusIcon(status: ReturnType<typeof cellStatus>) {
     if (status === "complete" || status === "skipped") {
+        // Renders the interface using the current data and interaction state.
         return <FaCheckCircle aria-hidden="true" />;
     }
 
     if (status === "in-progress") {
+        // Renders the interface using the current data and interaction state.
         return <FaExclamationTriangle aria-hidden="true" />;
     }
 
+    // Renders the interface using the current data and interaction state.
     return <FaTimesCircle aria-hidden="true" />;
 }
 
+// Sorts students by last name, then first name, in the selected direction.
 function compareStudents(a: StudentProgressRow, b: StudentProgressRow, sortMode: SortMode) {
+    if (a.userId === TEST_USER_ID || b.userId === TEST_USER_ID) {
+        return a.userId === b.userId ? 0 : a.userId === TEST_USER_ID ? -1 : 1;
+    }
     const lastCompare = a.lastName.localeCompare(b.lastName);
     const firstCompare = a.firstName.localeCompare(b.firstName);
 
@@ -380,6 +389,7 @@ function compareStudents(a: StudentProgressRow, b: StudentProgressRow, sortMode:
     return lastCompare !== 0 ? lastCompare : firstCompare;
 }
 
+// Converts the hidden-module map to numeric IDs and removes duplicates.
 function normalizeHiddenModuleMap(value: Record<string, unknown> | undefined): Record<number, number[]> {
     const normalized: Record<number, number[]> = {};
 
@@ -402,12 +412,15 @@ function normalizeHiddenModuleMap(value: Record<string, unknown> | undefined): R
     return normalized;
 }
 
+// Builds the class progress dashboard, including filters and module visibility controls.
 export default function AdminAnalyticsDashboard() {
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id, class_id } = useParams<RouteParams>();
 
     const schoolId = school_id || "";
     const classId = class_id || "";
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [className, setClassName] = useState("");
     const [items, setItems] = useState<DashboardItem[]>([]);
     const [students, setStudents] = useState<StudentProgressRow[]>([]);
@@ -420,13 +433,18 @@ export default function AdminAnalyticsDashboard() {
     const [hoveredStudentId, setHoveredStudentId] = useState<number | null>(null);
     const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
     const [studentHiddenModuleIds, setStudentHiddenModuleIds] = useState<Record<number, number[]>>({});
+    // Keeps table scroll ref available across renders without triggering a state update.
     const tableScrollRef = useRef<HTMLDivElement | null>(null);
+    // Keeps bottom scroll ref available across renders without triggering a state update.
     const bottomScrollRef = useRef<HTMLDivElement | null>(null);
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [bottomScrollWidth, setBottomScrollWidth] = useState(0);
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         let cancelled = false;
 
+        // Loads class name for this view.
         async function loadClassName() {
             const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
@@ -436,8 +454,9 @@ export default function AdminAnalyticsDashboard() {
             }
 
             try {
+                // Fetches the server data needed for this operation.
                 const classResponse = await axios.get<ClassAccessResponse>(
-                    `${API_URL}/class/id/${classId}/access`,
+                    `${API_URL}/classes/validate_class_access/${classId}`,
                     {
                         headers: authHeaders(),
                         params: {
@@ -459,6 +478,7 @@ export default function AdminAnalyticsDashboard() {
             }
         }
 
+        // Loads dashboard for this view.
         async function loadDashboard() {
             setLoading(true);
             setError("");
@@ -475,24 +495,16 @@ export default function AdminAnalyticsDashboard() {
             }
 
             try {
+                // Fetches the server data needed for this operation.
                 const dashboardResponse = await axios.get(
-                    `${API_URL}/projects/analytics_dashboard`,
+                    `${API_URL}/analytics-dashboard/analytics_dashboard`,
                     {
                         headers: authHeaders(),
-                        params: { class_id: classId },
+                        params: { class_id: classId, include_test_user: true },
                     },
                 );
 
-                const payload = parseMaybeJson<AnalyticsDashboardPayload>(
-                    dashboardResponse.data,
-                    {
-                        modules: [],
-                        projects: [],
-                        checkpointsByProjectId: {},
-                        submissionsByItemId: {},
-                        hiddenModulesByStudentId: {},
-                    },
-                );
+                const payload = dashboardResponse.data as AnalyticsDashboardPayload;
 
                 const modules = Array.isArray(payload.modules) ? payload.modules : [];
                 const projects = Array.isArray(payload.projects) ? payload.projects : [];
@@ -615,13 +627,13 @@ export default function AdminAnalyticsDashboard() {
                     })
                     .map((student) => {
                         const cells = cellMap.get(student.userId) || {};
-                        const completed = dashboardItems.filter((item) => {
+                        let completed = 0;
+                        let attempted = 0;
+                        for (const item of dashboardItems) {
                             const status = cellStatus(cells[item.id]);
-                            return status === "complete" || status === "skipped";
-                        }).length;
-                        const attempted = dashboardItems.filter(
-                            (item) => cellStatus(cells[item.id]) !== "not-started",
-                        ).length;
+                            if (status === "complete" || status === "skipped") completed++;
+                            if (status !== "not-started") attempted++;
+                        }
                         const total = dashboardItems.length;
                         const percentComplete = total > 0
                             ? Math.round((completed / total) * 100)
@@ -662,18 +674,23 @@ export default function AdminAnalyticsDashboard() {
         };
     }, [schoolId, classId]);
 
+    const realStudents = useMemo(() => students.filter((student) => student.userId !== TEST_USER_ID), [students]);
+
+    // Recomputes lecture options only when its dependencies change.
     const lectureOptions = useMemo(() => {
         return Array.from(
-            new Set(students.map((student) => student.lecture).filter(Boolean)),
+            new Set(realStudents.map((student) => student.lecture).filter(Boolean)),
         ).sort((a, b) => a.localeCompare(b));
-    }, [students]);
+    }, [realStudents]);
 
+    // Recomputes lab options only when its dependencies change.
     const labOptions = useMemo(() => {
         return Array.from(
-            new Set(students.map((student) => student.lab).filter(Boolean)),
+            new Set(realStudents.map((student) => student.lab).filter(Boolean)),
         ).sort((a, b) => a.localeCompare(b));
-    }, [students]);
+    }, [realStudents]);
 
+    // Recomputes filtered students only when its dependencies change.
     const filteredStudents = useMemo(() => {
         const normalizedSearch = searchText.trim().toLowerCase();
 
@@ -686,6 +703,8 @@ export default function AdminAnalyticsDashboard() {
                 if (!matchesSearch) {
                     return false;
                 }
+
+                if (student.userId === TEST_USER_ID) return true;
 
                 if (lectureFilter !== "all" && student.lecture !== lectureFilter) {
                     return false;
@@ -700,6 +719,7 @@ export default function AdminAnalyticsDashboard() {
             .sort((a, b) => compareStudents(a, b, sortMode));
     }, [students, searchText, lectureFilter, labFilter, sortMode]);
 
+    // Recomputes modules for header only when its dependencies change.
     const modulesForHeader = useMemo(() => {
         const groups: {
             moduleId: number;
@@ -724,6 +744,7 @@ export default function AdminAnalyticsDashboard() {
         return groups;
     }, [items]);
 
+    // Recomputes module visibility options only when its dependencies change.
     const moduleVisibilityOptions = useMemo<ModuleVisibilityOption[]>(() => {
         return modulesForHeader.map((module) => ({
             moduleId: module.moduleId,
@@ -732,11 +753,12 @@ export default function AdminAnalyticsDashboard() {
         }));
     }, [modulesForHeader]);
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         const validModuleIds = new Set(
             moduleVisibilityOptions.map((module) => module.moduleId),
         );
-        const validStudentIds = new Set(students.map((student) => student.userId));
+        const validStudentIds = new Set(realStudents.map((student) => student.userId));
 
         setStudentHiddenModuleIds((current) => {
             const next: Record<number, number[]> = {};
@@ -759,9 +781,11 @@ export default function AdminAnalyticsDashboard() {
 
             return next;
         });
-    }, [moduleVisibilityOptions, students]);
+    }, [moduleVisibilityOptions, realStudents]);
 
+    // Registers browser listeners and cleans them up when this effect reruns or the component unmounts.
     useEffect(() => {
+        // Measures the table width so the bottom scrollbar tracks the same content.
         function updateBottomScrollWidth() {
             if (!tableScrollRef.current) {
                 setBottomScrollWidth(0);
@@ -787,6 +811,7 @@ export default function AdminAnalyticsDashboard() {
         };
     }, [items, filteredStudents.length, studentHiddenModuleIds]);
 
+    // Synchronizes table scroll for this view.
     function syncTableScroll() {
         const table = tableScrollRef.current;
         const bottom = bottomScrollRef.current;
@@ -800,6 +825,7 @@ export default function AdminAnalyticsDashboard() {
         }
     }
 
+    // Synchronizes bottom scroll for this view.
     function syncBottomScroll() {
         if (!tableScrollRef.current || !bottomScrollRef.current) {
             return;
@@ -810,6 +836,7 @@ export default function AdminAnalyticsDashboard() {
         }
     }
 
+    // Helper for grade path used by this component.
     function gradePath(cell: ProgressCell): string {
         const sourceQuery = "?from=analytics";
 
@@ -820,6 +847,7 @@ export default function AdminAnalyticsDashboard() {
         return `/admin/school/${schoolId}/class/${classId}/module/${cell.item.moduleId}/project/${cell.item.projectId}/grade/${cell.submissionId}${sourceQuery}`;
     }
 
+    // Helper for view path used by this component.
     function viewPath(cell: ProgressCell): string {
         const sourceQuery = "?from=analytics";
 
@@ -830,6 +858,7 @@ export default function AdminAnalyticsDashboard() {
         return `/admin/school/${schoolId}/class/${classId}/module/${cell.item.moduleId}/project/${cell.item.projectId}/codeview/${cell.submissionId}${sourceQuery}`;
     }
 
+    // Helper for submissions path used by this component.
     function submissionsPath(item: DashboardItem): string {
         if (item.kind === "checkpoint") {
             return `/admin/school/${schoolId}/class/${classId}/module/${item.moduleId}/project/${item.projectId}/checkpoint/${item.checkpointId}/submissions`;
@@ -838,6 +867,7 @@ export default function AdminAnalyticsDashboard() {
         return `/admin/school/${schoolId}/class/${classId}/module/${item.moduleId}/project/${item.projectId}/submissions`;
     }
 
+    // Checks grade for this view.
     function hasGrade(cell: ProgressCell | undefined): boolean {
         const grade = cell?.grade?.trim();
 
@@ -848,26 +878,32 @@ export default function AdminAnalyticsDashboard() {
         );
     }
 
+    // Checks student module hidden for this view.
     function isStudentModuleHidden(userId: number, moduleId: number): boolean {
+        if (userId === TEST_USER_ID) return false;
         return studentHiddenModuleIds[userId]?.includes(moduleId) ?? false;
     }
 
+    // Checks module hidden for everyone for this view.
     function isModuleHiddenForEveryone(moduleId: number): boolean {
-        return students.length > 0 && students.every((student) => (
+        return realStudents.length > 0 && realStudents.every((student) => (
             isStudentModuleHidden(student.userId, moduleId)
         ));
     }
 
+    // Confirms visibility change for this view.
     function confirmVisibilityChange(message: string): boolean {
         return window.confirm(message);
     }
 
+    // Toggles student module visibility for this view.
     async function toggleStudentModuleVisibility(
         userId: number,
         moduleId: number,
         studentName: string,
         moduleName: string,
     ) {
+        if (userId === TEST_USER_ID) return;
         const currentlyHidden = isStudentModuleHidden(userId, moduleId);
         const nextHidden = !currentlyHidden;
         const action = currentlyHidden ? "show" : "hide";
@@ -884,7 +920,7 @@ export default function AdminAnalyticsDashboard() {
 
         try {
             await axios.post(
-                `${API_URL}/projects/student_module_visibility`,
+                `${API_URL}/assignment_permissions/set_student_module_visibility`,
                 {
                     class_id: classId,
                     student_id: userId,
@@ -916,6 +952,7 @@ export default function AdminAnalyticsDashboard() {
         }
     }
 
+    // Updates module visibility for all for this view.
     async function setModuleVisibilityForAll(
         moduleId: number,
         hidden: boolean,
@@ -934,8 +971,9 @@ export default function AdminAnalyticsDashboard() {
         }
 
         try {
+            // Sends this operation and its payload to the server.
             const response = await axios.post(
-                `${API_URL}/projects/module_visibility_for_all`,
+                `${API_URL}/assignment_permissions/set_module_visibility_for_all`,
                 {
                     class_id: classId,
                     module_id: moduleId,
@@ -950,7 +988,7 @@ export default function AdminAnalyticsDashboard() {
                 : [];
             const affectedStudentIds = responseStudentIds.length > 0
                 ? responseStudentIds
-                : students.map((student) => student.userId);
+                : realStudents.map((student) => student.userId);
 
             setStudentHiddenModuleIds((current) => {
                 const next: Record<number, number[]> = { ...current };
@@ -982,27 +1020,32 @@ export default function AdminAnalyticsDashboard() {
         }
     }
 
+    // Helper for visible module count for student used by this component.
     function visibleModuleCountForStudent(student: StudentProgressRow): number {
         return moduleVisibilityOptions.filter((module) => (
             !isStudentModuleHidden(student.userId, module.moduleId)
         )).length;
     }
 
+    // Recomputes modules hidden for everyone count only when its dependencies change.
     const modulesHiddenForEveryoneCount = useMemo(() => {
         return moduleVisibilityOptions.filter((module) => (
-            students.length > 0 && students.every((student) => (
+            realStudents.length > 0 && realStudents.every((student) => (
                 studentHiddenModuleIds[student.userId]?.includes(module.moduleId) ?? false
             ))
         )).length;
-    }, [moduleVisibilityOptions, students, studentHiddenModuleIds]);
+    }, [moduleVisibilityOptions, realStudents, studentHiddenModuleIds]);
 
+    // Renders student visibility controls for this view.
     function renderStudentVisibilityControls(student: StudentProgressRow) {
+        if (student.userId === TEST_USER_ID) return null;
         const visibleCount = visibleModuleCountForStudent(student);
 
         if (moduleVisibilityOptions.length === 0) {
             return null;
         }
 
+        // Renders the interface using the current data and interaction state.
         return (
             <details className="analytics-student-visibility">
                 <summary className="analytics-student-visibility-summary">
@@ -1027,6 +1070,7 @@ export default function AdminAnalyticsDashboard() {
                                 module.moduleId,
                             );
 
+                            // Renders the interface using the current data and interaction state.
                             return (
                                 <button
                                     type="button"
@@ -1074,6 +1118,7 @@ export default function AdminAnalyticsDashboard() {
         );
     }
 
+    // Renders progress cell for this view.
     function renderProgressCell(student: StudentProgressRow, item: DashboardItem) {
         const cell = student.cells[item.id];
         const status = cellStatus(cell);
@@ -1083,6 +1128,7 @@ export default function AdminAnalyticsDashboard() {
         const cellHasGrade = hasGrade(cell);
         const isHidden = isStudentModuleHidden(student.userId, item.moduleId);
 
+        // Renders the interface using the current data and interaction state.
         return (
             <td
                 className={[
@@ -1171,26 +1217,25 @@ export default function AdminAnalyticsDashboard() {
         );
     }
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div className="projects-page admin-analytics-page">
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>[Admin] MAAT</title>
             </Helmet>
 
+            {/* Shows progress while this view is waiting for data. */}
             <LoadingAnimation
                 show={loading}
                 message="Loading analytics dashboard..."
             />
 
+            {/* Displays the navigation and actions available on this page. */}
             <MenuComponent
-                showUpload={false}
-                showAdminUpload={false}
-                showHelp={false}
-                showCreate={false}
-                showLast={false}
-                showReviewButton={false}
             />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={[
                     { label: "School Selection", to: "/schools" },
@@ -1312,6 +1357,7 @@ export default function AdminAnalyticsDashboard() {
                                             {modulesForHeader.map((module) => {
                                                 const hiddenForEveryone = isModuleHiddenForEveryone(module.moduleId);
 
+                                                // Renders the interface using the current data and interaction state.
                                                 return (
                                                     <th
                                                         className={[
@@ -1367,6 +1413,7 @@ export default function AdminAnalyticsDashboard() {
                                             {items.map((item) => {
                                                 const hiddenForEveryone = isModuleHiddenForEveryone(item.moduleId);
 
+                                                // Renders the interface using the current data and interaction state.
                                                 return (
                                                     <th
                                                         className={[
@@ -1410,7 +1457,7 @@ export default function AdminAnalyticsDashboard() {
                                                 <th className="analytics-student-cell" scope="row">
                                                     <div className="analytics-student-name-row">
                                                         <span className="analytics-student-name">
-                                                            {student.fullName}
+                                                            {student.fullName}{student.userId === TEST_USER_ID ? " (admin testing)" : ""}
                                                         </span>
 
                                                         {student.isLocked ? (

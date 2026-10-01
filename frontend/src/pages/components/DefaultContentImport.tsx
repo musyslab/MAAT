@@ -1,3 +1,4 @@
+// DefaultContentImport.tsx: Renders the default content import interface and coordinates its local data and interactions.
 import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { createPortal } from "react-dom";
@@ -12,6 +13,7 @@ import {
 } from "react-icons/fa";
 import "../../styling/DefaultContentImport.scss";
 
+// Describes the item data expected by this file.
 type Item = {
     key: string;
     module: string;
@@ -20,11 +22,13 @@ type Item = {
     error: string | null;
 };
 
+// Describes the catalog data expected by this file.
 type Catalog = {
     enabled: boolean;
     items: Item[];
 };
 
+// Helper for available keys used by this component.
 const availableKeys = (data: Catalog) =>
     data.enabled
         ? data.items
@@ -32,18 +36,22 @@ const availableKeys = (data: Catalog) =>
             .map((item) => item.key)
         : [];
 
+// Helper for headers used by this component.
 const headers = () => ({
     Authorization: `Bearer ${localStorage.getItem("AUTOTA_AUTH_TOKEN")}`,
 });
 
+// Ends point for this view.
 const endpoint = () =>
-    `${import.meta.env.VITE_API_URL}/projects/default_content`;
+    `${import.meta.env.VITE_API_URL}/assignment_setup/default_content`;
 
+// Helper for message used by this component.
 const message = (error: unknown) =>
     axios.isAxiosError(error)
         ? error.response?.data?.message || error.message
         : "Could not load default projects.";
 
+// Renders the default content import interface and coordinates its local data and interactions.
 export default function DefaultContentImport({
     classId,
     onImported,
@@ -57,7 +65,11 @@ export default function DefaultContentImport({
     onToggleCreate?: () => void;
     createOpen?: boolean;
 }) {
+    // Keeps dialog available across renders without triggering a state update.
     const dialog = useRef<HTMLDialogElement>(null);
+    const currentClassRef = useRef(classId);
+    currentClassRef.current = classId;
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [catalog, setCatalog] = useState<Catalog>({
         enabled: false,
         items: [],
@@ -71,19 +83,20 @@ export default function DefaultContentImport({
     const [open, setOpen] = useState(false);
     const [expanded, setExpanded] = useState<string[]>([]);
 
+    // Recomputes groups only when its dependencies change.
     const groups = useMemo(() => {
         const result = new Map<string, Item[]>();
 
-        catalog.items.forEach((item) =>
-            result.set(item.module, [
-                ...(result.get(item.module) || []),
-                item,
-            ]),
-        );
+        catalog.items.forEach((item) => {
+            const group = result.get(item.module);
+            if (group) group.push(item);
+            else result.set(item.module, [item]);
+        });
 
         return Array.from(result.entries());
     }, [catalog.items]);
 
+    // Opens dialog for this view.
     const openDialog = () => {
         setExpanded([]);
 
@@ -94,6 +107,7 @@ export default function DefaultContentImport({
         setOpen(true);
     };
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (!open) return;
 
@@ -179,10 +193,17 @@ export default function DefaultContentImport({
         };
     }, [open]);
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         const controller = new AbortController();
 
         setFetching(true);
+        setCatalog({ enabled: false, items: [] });
+        setSelected([]);
+        setError("");
+        setNotice("");
+        setBusy(false);
+        setOpen(false);
 
         axios
             .get<Catalog>(endpoint(), {
@@ -191,12 +212,12 @@ export default function DefaultContentImport({
                 signal: controller.signal,
             })
             .then(({ data }) => {
+                if (controller.signal.aborted) return;
                 setCatalog(data);
                 setSelected(availableKeys(data));
 
                 if (
-                    data.enabled &&
-                    data.items.some((item) => !item.imported)
+                    availableKeys(data).length > 0
                 ) {
                     openDialog();
                 }
@@ -215,16 +236,19 @@ export default function DefaultContentImport({
         return () => controller.abort();
     }, [classId]);
 
+    // Helper for refresh used by this component.
     const refresh = async (selectAll = true) => {
         setFetching(true);
         setError("");
 
         try {
+            // Fetches the server data needed for this operation.
             const { data } = await axios.get<Catalog>(endpoint(), {
                 headers: headers(),
                 params: { class_id: classId },
             });
 
+            if (currentClassRef.current !== classId) return null;
             setCatalog(data);
 
             const available = availableKeys(data);
@@ -239,13 +263,15 @@ export default function DefaultContentImport({
 
             return data;
         } catch (error) {
+            if (currentClassRef.current !== classId) return null;
             setError(message(error));
             return null;
         } finally {
-            setFetching(false);
+            if (currentClassRef.current === classId) setFetching(false);
         }
     };
 
+    // Helper for import selected used by this component.
     const importSelected = async () => {
         if (busy || fetching || !selected.length) return;
 
@@ -254,6 +280,7 @@ export default function DefaultContentImport({
         setNotice("");
 
         try {
+            // Sends this operation and its payload to the server.
             const { data } = await axios.post(
                 endpoint(),
                 {
@@ -265,21 +292,24 @@ export default function DefaultContentImport({
                 },
             );
 
+            if (currentClassRef.current !== classId) return;
             setNotice(`Imported ${data.imported} project(s).`);
             setSelected([]);
             onImported();
 
             await refresh(false);
         } catch (error) {
+            if (currentClassRef.current !== classId) return null;
             setError(
                 `${message(error)} Refresh the list before retrying.`,
             );
             setSelected([]);
         } finally {
-            setBusy(false);
+            if (currentClassRef.current === classId) setBusy(false);
         }
     };
 
+    // Renders the interface using the current data and interaction state.
     return (
         <>
             {catalog.enabled || error ? (
@@ -462,6 +492,7 @@ export default function DefaultContentImport({
                                     const panelId =
                                         `default-import-module-${index}`;
 
+                                    // Renders the interface using the current data and interaction state.
                                     return (
                                         <section
                                             className="default-import-folder"

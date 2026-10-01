@@ -1,4 +1,5 @@
-import React, {
+// PythonIDE.tsx: Provides the Python editor, diagnostics, execution results, and interactive console input.
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -19,12 +20,14 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import "../../styling/PythonIDE.scss";
 
+// Describes the python ide run request data expected by this file.
 export type PythonIdeRunRequest = {
   filename: string;
   source: string;
   stdin: string;
 };
 
+// Describes the python ide run result data expected by this file.
 export type PythonIdeRunResult = {
   stdout?: string;
   stdout_transcript?: string;
@@ -35,6 +38,7 @@ export type PythonIdeRunResult = {
   waiting_for_input?: boolean;
 };
 
+// Describes the python ideprops data expected by this file.
 type PythonIDEProps = {
   filename: string;
   source: string;
@@ -44,6 +48,7 @@ type PythonIDEProps = {
   onRun: (request: PythonIdeRunRequest) => Promise<PythonIdeRunResult>;
 };
 
+// Describes the lint summary data expected by this file.
 type LintSummary = {
   errors: number;
   warnings: number;
@@ -53,6 +58,7 @@ const MAX_PYTHON_LINE_LENGTH = 88;
 const INPUT_EVENT_PATTERN =
   /\[\[\[MAAT_INPUT_B64:([A-Za-z0-9_-]*)\]\]\](?:\r?\n)?/g;
 
+// Converts a recorded input event into the values used by the input transcript.
 const decodeInputEvent = (encodedValue: string): string => {
   try {
     const base64Value = encodedValue.replace(/-/g, "+").replace(/_/g, "/");
@@ -68,6 +74,7 @@ const decodeInputEvent = (encodedValue: string): string => {
   }
 };
 
+// Formats console stdout for this view.
 const formatConsoleStdout = (result: PythonIdeRunResult): string => {
   if (!result.stdout_transcript) return result.stdout ?? "";
 
@@ -77,15 +84,18 @@ const formatConsoleStdout = (result: PythonIdeRunResult): string => {
   );
 };
 
+// Checks whether execution paused to request another console input value.
 const resultNeedsInput = (result: PythonIdeRunResult): boolean =>
   result.waiting_for_input ??
   /EOFError:\s*EOF when reading a line/i.test(result.stderr ?? "");
 
+// Checks editor content and builds the Python diagnostics shown to the user.
 const getPythonDiagnostics = (view: EditorView): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
   const diagnosticKeys = new Set<string>();
   const { doc } = view.state;
 
+  // Adds diagnostic for this view.
   const addDiagnostic = (diagnostic: Diagnostic) => {
     const key = `${diagnostic.from}:${diagnostic.to}:${diagnostic.severity}:${diagnostic.message}`;
 
@@ -95,7 +105,15 @@ const getPythonDiagnostics = (view: EditorView): Diagnostic[] => {
     }
   };
 
-  syntaxTree(view.state).iterate({
+  const tree = syntaxTree(view.state);
+  const isCodePosition = (position: number) => {
+    for (let node: ReturnType<typeof tree.resolveInner> | null = tree.resolveInner(position, 1); node; node = node.parent) {
+      if (node.name === "String" || node.name === "Comment") return false;
+    }
+    return true;
+  };
+
+  tree.iterate({
     enter: (node) => {
       if (!node.type.isError) return;
 
@@ -145,7 +163,7 @@ const getPythonDiagnostics = (view: EditorView): Diagnostic[] => {
 
     const bareExcept = /^\s*except\s*:/.exec(lineText);
 
-    if (bareExcept) {
+    if (bareExcept && isCodePosition(line.from + lineText.indexOf("except"))) {
       const exceptOffset = lineText.indexOf("except");
 
       addDiagnostic({
@@ -160,6 +178,10 @@ const getPythonDiagnostics = (view: EditorView): Diagnostic[] => {
     let comparisonMatch = identityComparison.exec(lineText);
 
     while (comparisonMatch) {
+      if (!isCodePosition(line.from + comparisonMatch.index)) {
+        comparisonMatch = identityComparison.exec(lineText);
+        continue;
+      }
       const comparedValue = comparisonMatch[1];
 
       addDiagnostic({
@@ -179,9 +201,11 @@ const getPythonDiagnostics = (view: EditorView): Diagnostic[] => {
   return diagnostics;
 };
 
+// Formats issue count for this view.
 const formatIssueCount = (count: number, singular: string) =>
   `${count} ${singular}${count === 1 ? "" : "s"}`;
 
+// Provides the Python editor, diagnostics, execution results, and interactive console input.
 const PythonIDE = ({
   filename,
   source,
@@ -190,6 +214,7 @@ const PythonIDE = ({
   onSourceChange,
   onRun,
 }: PythonIDEProps) => {
+  // Keeps the values that drive this component’s display and user interactions in React state.
   const [sessionInput, setSessionInput] = useState<string>("");
   const [consoleInput, setConsoleInput] = useState<string>("");
   const [output, setOutput] = useState<string>("");
@@ -201,9 +226,28 @@ const PythonIDE = ({
     errors: 0,
     warnings: 0,
   });
+  // Keeps run program ref available across renders without triggering a state update.
   const runProgramRef = useRef<() => Promise<void>>(async () => undefined);
+  // Keeps console input ref available across renders without triggering a state update.
   const consoleInputRef = useRef<HTMLInputElement>(null);
+  const executionRef = useRef({ id: 0, running: false });
 
+  useEffect(() => {
+    executionRef.current.id += 1;
+    executionRef.current.running = false;
+    setIsRunning(false);
+    setIsWaitingForInput(false);
+    setSessionInput("");
+    setConsoleInput("");
+    setOutput("");
+    setRunError("");
+    return () => {
+      executionRef.current.id += 1;
+      executionRef.current.running = false;
+    };
+  }, [source, filename, disabled]);
+
+  // Formats result for this view.
   const formatResult = (
     result: PythonIdeRunResult,
     waitingForInput: boolean,
@@ -227,8 +271,9 @@ const PythonIDE = ({
     return "Program finished with no output.";
   };
 
+  // Sends the editor program for execution and handles its returned result.
   const executeProgram = async (stdin: string, startsNewSession: boolean) => {
-    if (disabled || isRunning) return;
+    if (disabled || executionRef.current.running) return;
 
     if (!source.trim()) {
       setRunError("Enter Python code before running the program.");
@@ -236,6 +281,13 @@ const PythonIDE = ({
       return;
     }
 
+    if (!/^[^\\/:*?"<>|]+\.py$/i.test(filename.trim())) {
+      setRunError("Enter a valid file name ending in .py.");
+      return;
+    }
+
+    const runId = ++executionRef.current.id;
+    executionRef.current.running = true;
     if (startsNewSession) {
       setSessionInput("");
       setConsoleInput("");
@@ -247,7 +299,8 @@ const PythonIDE = ({
     setRunError("");
 
     try {
-      const result = await onRun({ filename, source, stdin });
+      const result = await onRun({ filename: filename.trim(), source, stdin });
+      if (runId !== executionRef.current.id) return;
       const waitingForInput = resultNeedsInput(result);
 
       setOutput(formatResult(result, waitingForInput));
@@ -258,6 +311,7 @@ const PythonIDE = ({
         setConsoleInput("");
       }
     } catch (error: any) {
+      if (runId !== executionRef.current.id) return;
       setIsWaitingForInput(false);
       setRunError(
         error?.response?.data?.message ||
@@ -265,16 +319,21 @@ const PythonIDE = ({
           "The program could not be run.",
       );
     } finally {
-      setIsRunning(false);
+      if (runId === executionRef.current.id) {
+        executionRef.current.running = false;
+        setIsRunning(false);
+      }
     }
   };
 
+  // Runs program for this view.
   const runProgram = async () => {
     await executeProgram("", true);
   };
 
+  // Supplies the entered console input so the program can continue running.
   const sendConsoleInput = async () => {
-    if (disabled || isRunning || !isWaitingForInput) return;
+    if (disabled || executionRef.current.running || !isWaitingForInput) return;
 
     const submittedValue = consoleInput;
     const nextSessionInput = `${sessionInput}${submittedValue}\n`;
@@ -291,10 +350,12 @@ const PythonIDE = ({
 
   runProgramRef.current = runProgram;
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     if (isWaitingForInput) consoleInputRef.current?.focus();
   }, [isWaitingForInput]);
 
+  // Recomputes editor extensions only when its dependencies change.
   const editorExtensions = useMemo(
     () => [
       python(),
@@ -317,6 +378,7 @@ const PythonIDE = ({
     [],
   );
 
+  // Keeps the handle editor update callback stable until its dependencies change.
   const handleEditorUpdate = useCallback((update: ViewUpdate) => {
     let errors = 0;
     let warnings = 0;
@@ -356,6 +418,7 @@ const PythonIDE = ({
           .join(", ")
       : "No issues found";
 
+  // Renders the interface using the current data and interaction state.
   return (
     <section
       className="maat-python-ide"
@@ -449,8 +512,8 @@ const PythonIDE = ({
                 highlightSelectionMatches: true,
                 lineNumbers: true,
               }}
-              editable={!disabled}
-              readOnly={disabled}
+              editable={!disabled && !isRunning}
+              readOnly={disabled || isRunning}
               onChange={(value) => onSourceChange(value)}
               onUpdate={handleEditorUpdate}
               placeholder="# Start writing Python..."

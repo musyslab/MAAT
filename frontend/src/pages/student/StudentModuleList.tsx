@@ -1,3 +1,4 @@
+// StudentModuleList.tsx: Displays the student module calendar and opens available module details.
 import { CSSProperties, KeyboardEvent, useEffect, useMemo, useState } from "react"
 import axios from "axios"
 import { Helmet } from "react-helmet"
@@ -13,6 +14,7 @@ import MenuComponent from "../components/MenuComponent"
 import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs"
 import "../../styling/ModuleList.scss"
 
+// Describes the module object data expected by this file.
 interface ModuleObject {
     Id: number
     ClassId: number
@@ -25,6 +27,7 @@ interface ModuleObject {
     IsHidden?: boolean
 }
 
+// Describes the class access response data expected by this file.
 interface ClassAccessResponse {
     id?: number
     name?: string
@@ -32,12 +35,14 @@ interface ClassAccessResponse {
     school_name?: string
 }
 
+// Describes the calendar day data expected by this file.
 type CalendarDay = {
     date: Date
     isCurrentMonth: boolean
     key: string
 }
 
+// Describes the calendar week segment data expected by this file.
 type CalendarWeekSegment = {
     module: ModuleObject
     startColumn: number
@@ -47,17 +52,22 @@ type CalendarWeekSegment = {
     endsAfterWeek: boolean
 }
 
+// Describes the calendar week data expected by this file.
 type CalendarWeek = {
     key: string
     days: CalendarDay[]
     segments: CalendarWeekSegment[]
 }
 
+// Builds the authorization header used by authenticated API requests.
 const authHeader = () => ({
+  ...(window.location.pathname.includes("/student-preview") ? { "X-MAAT-Test-User": "1" } : {}),
     Authorization: `Bearer ${localStorage.getItem("AUTOTA_AUTH_TOKEN")}`
 })
 
+// Displays the student module calendar and opens available module details.
 export default function StudentModuleList() {
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id, class_id } = useParams<{ school_id: string; class_id: string }>()
     const navigate = useNavigate()
     const location = useLocation()
@@ -67,6 +77,7 @@ export default function StudentModuleList() {
     const isAdminPreview = location.pathname.includes("/student-preview")
     const adminPreviewBasePath = `/admin/school/${schoolId}/class/${classId}/student-preview`
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [className, setClassName] = useState("")
     const [modules, setModules] = useState<ModuleObject[]>([])
     const [calendarDate, setCalendarDate] = useState<Date>(new Date())
@@ -74,29 +85,34 @@ export default function StudentModuleList() {
     const [isLoading, setIsLoading] = useState(true)
     const [errorMessage, setErrorMessage] = useState("")
 
+    // Parses date for this view.
     const parseDate = (value: string): Date | null => {
         const d = new Date(value)
         return Number.isNaN(d.getTime()) ? null : d
     }
 
+    // Helper for same day used by this component.
     const sameDay = (a: Date, b: Date): boolean => (
         a.getFullYear() === b.getFullYear()
         && a.getMonth() === b.getMonth()
         && a.getDate() === b.getDate()
     )
 
+    // Starts of day for this view.
     const startOfDay = (d: Date): Date => {
         const next = new Date(d)
         next.setHours(0, 0, 0, 0)
         return next
     }
 
+    // Ends of day for this view.
     const endOfDay = (d: Date): Date => {
         const next = new Date(d)
         next.setHours(23, 59, 59, 999)
         return next
     }
 
+    // Formats month title for this view.
     const formatMonthTitle = (date: Date): string => (
         new Intl.DateTimeFormat("en-US", {
             month: "long",
@@ -104,6 +120,7 @@ export default function StudentModuleList() {
         }).format(date)
     )
 
+    // Formats time for this view.
     const formatTime = (value: string): string => {
         const d = parseDate(value)
         if (!d) return value
@@ -115,6 +132,7 @@ export default function StudentModuleList() {
         }).format(d)
     }
 
+    // Formats short date for this view.
     const formatShortDate = (value: string): string => {
         const d = parseDate(value)
         if (!d) return value
@@ -125,6 +143,7 @@ export default function StudentModuleList() {
         }).format(d)
     }
 
+    // Formats date12h for this view.
     const formatDate12h = (value: string): string => {
         const d = parseDate(value)
         if (!d) return value
@@ -139,6 +158,7 @@ export default function StudentModuleList() {
         }).format(d)
     }
 
+    // Returns module status for this view.
     const getModuleStatus = (module: ModuleObject): "active" | "upcoming" | "ended" => {
         const startMs = Date.parse(module.Start)
         const endMs = Date.parse(module.End)
@@ -151,6 +171,7 @@ export default function StudentModuleList() {
         return now < startMs ? "upcoming" : "ended"
     }
 
+    // Returns module status label for this view.
     const getModuleStatusLabel = (module: ModuleObject): string => {
         const status = getModuleStatus(module)
 
@@ -159,6 +180,7 @@ export default function StudentModuleList() {
         return "Upcoming"
     }
 
+    // Checks module active now for this view.
     const isModuleActiveNow = (module: ModuleObject): boolean => {
         const startMs = Date.parse(module.Start)
         const endMs = Date.parse(module.End)
@@ -169,6 +191,7 @@ export default function StudentModuleList() {
         return now >= startMs && now <= endMs
     }
 
+    // Helper for module occurs on date used by this component.
     const moduleOccursOnDate = (module: ModuleObject, date: Date): boolean => {
         const start = parseDate(module.Start)
         const end = parseDate(module.End)
@@ -178,15 +201,18 @@ export default function StudentModuleList() {
         return start <= endOfDay(date) && end >= startOfDay(date)
     }
 
+    // Helper for clamp used by this component.
     const clamp = (value: number, min: number, max: number): number => (
         Math.min(Math.max(value, min), max)
     )
 
+    // Returns day index within week for this view.
     const getDayIndexWithinWeek = (date: Date, weekStart: Date): number => {
         const dayMs = 24 * 60 * 60 * 1000
         return Math.floor((startOfDay(date).getTime() - startOfDay(weekStart).getTime()) / dayMs)
     }
 
+    // Returns module date label for this view.
     const getModuleDateLabel = (module: ModuleObject): string => {
         const start = parseDate(module.Start)
         const end = parseDate(module.End)
@@ -202,6 +228,7 @@ export default function StudentModuleList() {
         return `${formatShortDate(module.Start)}, ${formatTime(module.Start)} - ${formatShortDate(module.End)}, ${formatTime(module.End)}`
     }
 
+    // Loads class name for this view.
     const loadClassName = () => {
         if (!classId) {
             setClassName("")
@@ -210,7 +237,7 @@ export default function StudentModuleList() {
 
         axios
             .get<ClassAccessResponse>(
-                `${import.meta.env.VITE_API_URL}/class/id/${classId}/access`,
+                `${import.meta.env.VITE_API_URL}/classes/validate_class_access/${classId}`,
                 {
                     headers: authHeader(),
                     params: {
@@ -228,6 +255,7 @@ export default function StudentModuleList() {
             })
     }
 
+    // Loads modules for this view.
     const loadModules = () => {
         if (!classId) {
             setModules([])
@@ -240,7 +268,7 @@ export default function StudentModuleList() {
         setErrorMessage("")
 
         axios
-            .get(`${import.meta.env.VITE_API_URL}/projects/get_modules_by_class_id_student?id=${classId}`, {
+            .get(`${import.meta.env.VITE_API_URL}/assignment_tracking/get_modules_by_class_id_student?id=${classId}`, {
                 headers: authHeader()
             })
             .then((res) => {
@@ -269,12 +297,14 @@ export default function StudentModuleList() {
             })
     }
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         loadClassName()
         loadModules()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [schoolId, classId, isAdminPreview])
 
+    // Recomputes sorted modules only when its dependencies change.
     const sortedModules = useMemo(() => {
         return [...modules].sort((a, b) => {
             const da = Date.parse(a.Start)
@@ -290,6 +320,7 @@ export default function StudentModuleList() {
         })
     }, [modules])
 
+    // Recomputes calendar days only when its dependencies change.
     const calendarDays = useMemo<CalendarDay[]>(() => {
         const year = calendarDate.getFullYear()
         const month = calendarDate.getMonth()
@@ -314,6 +345,7 @@ export default function StudentModuleList() {
         return days
     }, [calendarDate])
 
+    // Recomputes calendar weeks only when its dependencies change.
     const calendarWeeks = useMemo<CalendarWeek[]>(() => {
         const weeks: CalendarWeek[] = []
 
@@ -373,19 +405,23 @@ export default function StudentModuleList() {
         return weeks
     }, [calendarDays, sortedModules])
 
+    // Helper for go to previous month used by this component.
     const goToPreviousMonth = () => {
         setCalendarDate((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))
     }
 
+    // Helper for go to next month used by this component.
     const goToNextMonth = () => {
         setCalendarDate((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))
     }
 
+    // Helper for go to today used by this component.
     const goToToday = () => {
         const today = new Date()
         setCalendarDate(new Date(today.getFullYear(), today.getMonth(), 1))
     }
 
+    // Opens module for this view.
     const openModule = (module: ModuleObject) => {
         navigate(
             isAdminPreview
@@ -394,6 +430,7 @@ export default function StudentModuleList() {
         )
     }
 
+    // Handles module card key down for this view.
     const handleModuleCardKeyDown = (event: KeyboardEvent<HTMLElement>, module: ModuleObject) => {
         if (event.key !== "Enter" && event.key !== " ") return
 
@@ -401,21 +438,19 @@ export default function StudentModuleList() {
         openModule(module)
     }
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div className="projects-page">
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>MAAT</title>
             </Helmet>
 
+            {/* Displays the navigation and actions available on this page. */}
             <MenuComponent
-                showUpload={!isAdminPreview}
-                showAdminUpload={false}
-                showHelp={false}
-                showCreate={false}
-                showLast={false}
-                showReviewButton={false}
             />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={isAdminPreview
                     ? [
@@ -446,7 +481,7 @@ export default function StudentModuleList() {
 
             {isAdminPreview ? (
                 <div className="pageMessage" role="status">
-                    Admin preview: this is a read-only preview of the student experience.
+                    Admin preview: open an assignment and submit as the Test User.
                     Submissions and student-only actions are disabled.
                 </div>
             ) : null}
@@ -492,6 +527,7 @@ export default function StudentModuleList() {
                             const status = getModuleStatus(module)
                             const active = status === "active"
 
+                            // Renders the interface using the current data and interaction state.
                             return (
                                 <article
                                     className={`module-list-card is-${status}`}
@@ -575,11 +611,13 @@ export default function StudentModuleList() {
                                 "--event-rows": maxEventRow
                             } as CSSProperties
 
+                            // Renders the interface using the current data and interaction state.
                             return (
                                 <div className="calendar-week" key={week.key} style={weekStyle}>
                                     {week.days.map((day) => {
                                         const today = sameDay(day.date, new Date())
 
+                                        // Renders the interface using the current data and interaction state.
                                         return (
                                             <div
                                                 className={[
@@ -597,6 +635,7 @@ export default function StudentModuleList() {
                                                         .map((module) => {
                                                             const active = isModuleActiveNow(module)
 
+                                                            // Renders the interface using the current data and interaction state.
                                                             return (
                                                                 <button
                                                                     type="button"
@@ -623,6 +662,7 @@ export default function StudentModuleList() {
                                             {week.segments.map((segment) => {
                                                 const active = isModuleActiveNow(segment.module)
 
+                                                // Renders the interface using the current data and interaction state.
                                                 return (
                                                     <button
                                                         type="button"

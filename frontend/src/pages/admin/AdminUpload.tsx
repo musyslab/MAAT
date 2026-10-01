@@ -1,3 +1,4 @@
+// AdminUpload.tsx: Renders the admin upload interface and coordinates its local data and interactions.
 import React, { Component } from 'react'
 import axios from 'axios'
 import { useNavigate, NavigateFunction, useParams } from 'react-router-dom'
@@ -9,18 +10,21 @@ import LoadingAnimation from '../components/LoadingAnimation'
 import '../../styling/AdminUploadPage.scss'
 import '../../styling/FileUploadCommon.scss'
 
+// Describes the student data expected by this file.
 interface Student {
     name: string
     mscsnet: string
     id: number
 }
 
+// Describes the drop down option data expected by this file.
 interface DropDownOption {
     key: number
     value: number
     text: string
 }
 
+// Describes the module object data expected by this file.
 interface ModuleObject {
     Id: number
     ClassId: number
@@ -35,6 +39,7 @@ interface ModuleObject {
     MainCompleted?: boolean
 }
 
+// Describes the checkpoint option data expected by this file.
 interface CheckpointOption {
     id: number
     number: number
@@ -44,11 +49,13 @@ interface CheckpointOption {
     available: boolean
 }
 
+// Describes the upload targets response data expected by this file.
 interface UploadTargetsResponse {
     checkpoints?: CheckpointOption[]
     mainAvailable?: boolean
 }
 
+// Describes the class access response data expected by this file.
 interface ClassAccessResponse {
     id?: number
     name?: string
@@ -56,6 +63,7 @@ interface ClassAccessResponse {
     school_name?: string
 }
 
+// Describes the upload page state data expected by this file.
 interface UploadPageState {
     files: File[]
     mainJavaFileName: string
@@ -80,19 +88,23 @@ interface UploadPageState {
     isTargetLoading: boolean
 }
 
+// Describes the admin upload page props data expected by this file.
 interface AdminUploadPageProps {
     navigate: NavigateFunction
     schoolIdFromUrl: string
     classIdFromUrl: string
 }
 
+// Renders the admin upload page wrapper interface and coordinates its local data and interactions.
 const AdminUploadPageWrapper: React.FC = () => {
     const navigate = useNavigate()
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id, class_id } = useParams<{
         school_id: string
         class_id: string
     }>()
 
+    // Renders the interface using the current data and interaction state.
     return (
         <AdminUploadPage
             navigate={navigate}
@@ -104,19 +116,16 @@ const AdminUploadPageWrapper: React.FC = () => {
 
 class AdminUpload extends Component<{}, {}> {
     render() {
+        // Renders the interface using the current data and interaction state.
         return (
             <div className="admin-upload-root">
+                {/* Sets the page title and document metadata. */}
                 <Helmet>
                     <title>[Admin] MAAT</title>
                 </Helmet>
 
+                {/* Displays the navigation and actions available on this page. */}
                 <MenuComponent
-                    showUpload={false}
-                    showAdminUpload={true}
-                    showHelp={false}
-                    showCreate={false}
-                    showLast={false}
-                    showReviewButton={false}
                 />
 
                 <div className="main-grid admin-upload-grid">
@@ -255,9 +264,10 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
         if (!(schoolId > 0) || !(classId > 0)) return
 
         try {
+            // Fetches the server data needed for this operation.
             const res = await axios.get<ClassAccessResponse>(
                 import.meta.env.VITE_API_URL +
-                    `/class/id/${classId}/access?school_id=${schoolId}&role_context=admin`,
+                    `/classes/validate_class_access/${classId}?school_id=${schoolId}&role_context=admin`,
                 { headers: this.authHeaders() }
             )
 
@@ -276,13 +286,15 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
         if (!(classId > 0)) return
 
         try {
+            // Fetches the server data needed for this operation.
             const res = await axios.get(
-                import.meta.env.VITE_API_URL + `/upload/total_students_by_cid?class_id=${classId}`,
+                import.meta.env.VITE_API_URL + `/upload/total_students?class_id=${classId}`,
                 { headers: this.authHeaders() }
             )
 
             const students = res.data as Array<Student>
 
+            // Helper for last name of used by this component.
             const lastNameOf = (full: string) => {
                 const n = (full || '').trim()
                 if (!n) return ''
@@ -291,7 +303,8 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
                 return parts[parts.length - 1]!
             }
 
-            const isTestStudent = (name: string) => (name || '').trim().toLowerCase() === 'test student'
+            // Checks test student for this view.
+            const isTestStudent = (name: string) => (name || '').trim().toLowerCase() === 'test user'
 
             const sorted = [...students].sort((a, b) => {
                 const aTest = isTestStudent(a.name)
@@ -325,8 +338,9 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
         if (!(classId > 0)) return
 
         try {
+            // Fetches the server data needed for this operation.
             const res = await axios.get(
-                import.meta.env.VITE_API_URL + `/projects/get_modules_by_class_id?id=${classId}`,
+                import.meta.env.VITE_API_URL + `/assignment_tracking/get_modules_by_class_id?id=${classId}`,
                 { headers: this.authHeaders() }
             )
 
@@ -365,7 +379,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
     }
 
     private async loadAvailableTargets(projectId: number, studentId: number) {
-        if (!(projectId > 0) || !(studentId > 0)) return
+        if (!(projectId > 0) || !(studentId !== 0)) return
 
         this.setState({
             isTargetLoading: true,
@@ -374,6 +388,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
         })
 
         try {
+            // Fetches the server data needed for this operation.
             const res = await axios.get<UploadTargetsResponse>(
                 import.meta.env.VITE_API_URL + `/upload/available_targets`,
                 {
@@ -498,7 +513,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
                 mainJavaFileName: '',
             },
             () => {
-                if (nextProjectId > 0 && this.state.student_id > 0) {
+                if (nextProjectId > 0 && this.state.student_id !== 0) {
                     this.loadAvailableTargets(nextProjectId, this.state.student_id)
                 }
             }
@@ -511,6 +526,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
 
         if (CODE_ICON_RE.test(filename)) return <FaCode className="file-language-icon" aria-hidden="true" />
         if (TEXT_ICON_RE.test(filename)) return <FaAlignJustify className="file-language-icon" aria-hidden="true" />
+        // Renders the interface using the current data and interaction state.
         return <FaTimes className="file-language-icon" aria-hidden="true" />
     }
 
@@ -518,6 +534,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
         const files = e.target.files
         const fileArr = files ? Array.from(files) : []
 
+        // Checks java file for this view.
         const isJavaFile = (f: File) => f.name.toLowerCase().endsWith('.java')
 
         if (fileArr.length > 1 && fileArr.every((f) => !isJavaFile(f))) {
@@ -550,7 +567,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
             this.state.isLoading ||
             !(this.state.school_id > 0) ||
             !(this.state.class_id > 0) ||
-            !(this.state.student_id > 0) ||
+            !(this.state.student_id !== 0) ||
             !(this.state.module_id > 0) ||
             !(this.state.project_id > 0) ||
             !this.state.targetAvailabilityLoaded ||
@@ -581,6 +598,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
             return
         }
 
+        // Checks java file for this view.
         const isJavaFile = (f: File) => f.name.toLowerCase().endsWith('.java')
 
         if (this.state.files.length > 1 && this.state.files.every((f) => !isJavaFile(f))) {
@@ -616,14 +634,10 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
         }
 
         axios
-            .post(import.meta.env.VITE_API_URL + `/upload/`, formData, {
+            .post(import.meta.env.VITE_API_URL + `/upload/file_upload`, formData, {
                 headers: this.authHeaders(),
             })
             .then((res) => {
-                const checkpointQuery = isCheckpoint
-                    ? `?checkpoint=1&checkpoint_id=${this.state.selectedCheckpointId.toString()}`
-                    : ''
-
                 const codeViewBase = isCheckpoint
                     ? `/admin/school/${this.state.school_id.toString()}` +
                     `/class/${this.state.class_id.toString()}` +
@@ -637,7 +651,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
                     `/project/${this.state.project_id.toString()}` +
                     `/codeview/${res.data.sid.toString()}`
 
-                window.location.href = `${codeViewBase}${checkpointQuery}${checkpointQuery ? '&' : '?'}from=admin-upload`
+                window.location.href = `${codeViewBase}?from=admin-upload`
             })
             .catch((err) => {
                 this.setState({
@@ -650,7 +664,7 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
     }
 
     render() {
-        const studentChosen = this.state.student_id > 0
+        const studentChosen = this.state.student_id !== 0
         const moduleChosen = this.state.module_id > 0
         const projectChosen = this.state.project_id > 0
 
@@ -685,10 +699,13 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
             ? checkpointRows.filter((checkpoint) => !!checkpoint.enabled)
             : []
 
+        // Renders the interface using the current data and interaction state.
         return (
             <>
+                {/* Shows progress while this view is waiting for data. */}
                 <LoadingAnimation show={this.state.isUploading} message="Uploading..." />
 
+                {/* Shows the current location and links back to parent pages. */}
                 <DirectoryBreadcrumbs
                     items={[
                         { label: 'School Selection', to: '/schools' },
@@ -875,12 +892,14 @@ class AdminUploadPage extends Component<AdminUploadPageProps, UploadPageState> {
 
                                                     <div className="file-preview-list" title="Selected files">
                                                         {(() => {
+                                                            // Checks java file for this view.
                                                             const isJavaFile = (f: File) => f.name.toLowerCase().endsWith('.java')
                                                             const showMainTag =
                                                                 this.state.files.length > 1 &&
                                                                 this.state.files.every(isJavaFile) &&
                                                                 !!this.state.mainJavaFileName
 
+                                                            // Renders the interface using the current data and interaction state.
                                                             return this.state.files.map((f) => (
                                                                 <div key={f.name} className="file-preview-row solution-file-card">
                                                                     <span className="file-icon-wrapper" aria-hidden="true">

@@ -1,3 +1,4 @@
+// AdminModuleList.tsx: Displays the module calendar and manages module creation, dates, and edits.
 import {
     CSSProperties,
     KeyboardEvent,
@@ -28,6 +29,7 @@ import MenuComponent from "../components/MenuComponent";
 import "../../styling/ModuleList.scss";
 import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs";
 
+// Describes the module object data expected by this file.
 interface ModuleObject {
     Id: number;
     ClassId: number;
@@ -40,6 +42,7 @@ interface ModuleObject {
     PracticeProblemsEnabled?: boolean;
 }
 
+// Describes the class access response data expected by this file.
 interface ClassAccessResponse {
     id?: number;
     name?: string;
@@ -47,12 +50,14 @@ interface ClassAccessResponse {
     school_name?: string;
 }
 
+// Describes the calendar day data expected by this file.
 type CalendarDay = {
     date: Date;
     isCurrentMonth: boolean;
     key: string;
 };
 
+// Describes the calendar week segment data expected by this file.
 type CalendarWeekSegment = {
     module: ModuleObject;
     startColumn: number;
@@ -62,17 +67,20 @@ type CalendarWeekSegment = {
     endsAfterWeek: boolean;
 };
 
+// Describes the calendar week data expected by this file.
 type CalendarWeek = {
     key: string;
     days: CalendarDay[];
     segments: CalendarWeekSegment[];
 };
 
+// Describes the date range data expected by this file.
 type DateRange = {
     start: Date;
     end: Date;
 };
 
+// Describes the date time field props data expected by this file.
 type DateTimeFieldProps = {
     label: string;
     value: string;
@@ -87,12 +95,15 @@ type DateTimeFieldProps = {
     hasError: boolean;
 };
 
+// Builds the authorization header used by authenticated API requests.
 const authHeader = () => ({
     Authorization: `Bearer ${localStorage.getItem("AUTOTA_AUTH_TOKEN")}`,
 });
 
+// Helper for pad used by this component.
 const pad = (n: number) => n.toString().padStart(2, "0");
 
+// Formats date time local for this view.
 const formatDateTimeLocal = (date: Date): string => {
     return [
         date.getFullYear(),
@@ -107,6 +118,7 @@ const formatDateTimeLocal = (date: Date): string => {
     ].join("");
 };
 
+// Parses date time local for this view.
 const parseDateTimeLocal = (value: string): Date | null => {
     if (!value) return null;
 
@@ -114,12 +126,14 @@ const parseDateTimeLocal = (value: string): Date | null => {
     return Number.isNaN(date.getTime()) ? null : date;
 };
 
+// Helper for default module start used by this component.
 const defaultModuleStart = () => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d;
 };
 
+// Helper for default module end used by this component.
 const defaultModuleEnd = () => {
     const d = new Date();
     d.setDate(d.getDate() + 7);
@@ -127,6 +141,7 @@ const defaultModuleEnd = () => {
     return d;
 };
 
+// Returns injected times for this view.
 const getInjectedTimes = (dateValue: Date | null): Date[] => {
     if (!dateValue) return [];
 
@@ -136,6 +151,7 @@ const getInjectedTimes = (dateValue: Date | null): Date[] => {
     return [endOfDay];
 };
 
+// Builds the dates highlighted by the selected calendar range.
 const getDateRangeHighlightDates = (
     start: Date | null,
     end: Date | null,
@@ -145,6 +161,7 @@ const getDateRangeHighlightDates = (
     return eachDayOfInterval({ start, end });
 };
 
+// Finds calendar days blocked by the existing scheduling ranges.
 const getFullyBlockedDates = (ranges: DateRange[]): Date[] => {
     const dates: Date[] = [];
 
@@ -173,9 +190,11 @@ const getFullyBlockedDates = (ranges: DateRange[]): Date[] => {
     return dates;
 };
 
+// Checks whether a date falls within the supplied scheduling range.
 const dateOverlapsRange = (date: Date, ranges: DateRange[]): boolean =>
     ranges.some((range) => date > range.start && date < range.end);
 
+// Checks the proposed date range against existing ranges for conflicts.
 const dateRangeOverlapsRanges = (
     start: Date | null,
     end: Date | null,
@@ -186,6 +205,7 @@ const dateRangeOverlapsRanges = (
     return ranges.some((range) => start < range.end && end > range.start);
 };
 
+// Renders the date time field interface and coordinates its local data and interactions.
 function DateTimeField({
     label,
     value,
@@ -201,6 +221,7 @@ function DateTimeField({
 }: DateTimeFieldProps) {
     const selectedDate = parseDateTimeLocal(value);
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div
             className={`form-field input-field datetime-field${hasError ? " input-error" : ""}`}
@@ -237,7 +258,9 @@ function DateTimeField({
     );
 }
 
+// Displays the module calendar and manages module creation, dates, and edits.
 export default function AdminModuleList() {
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id, class_id, id } = useParams<{
         school_id: string;
         class_id: string;
@@ -247,16 +270,21 @@ export default function AdminModuleList() {
     const schoolId = school_id || "";
     const classId = class_id || id || "";
 
+    // Keeps overlap dialog available across renders without triggering a state update.
     const overlapDialog = useRef<HTMLDialogElement>(null);
+    // Keeps overlap decision available across renders without triggering a state update.
     const overlapDecision = useRef<((confirmed: boolean) => void) | null>(null);
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [overlapWarningOpen, setOverlapWarningOpen] = useState(false);
 
+    // Continues the pending scheduling action after an overlap is confirmed.
     const confirmOverlap = (): Promise<boolean> => new Promise(resolve => {
         overlapDecision.current = resolve;
         overlapDialog.current?.showModal();
         setOverlapWarningOpen(true);
     });
 
+    // Closes overlap warning for this view.
     const closeOverlapWarning = (confirmed: boolean) => {
         const resolve = overlapDecision.current;
         overlapDecision.current = null;
@@ -265,6 +293,7 @@ export default function AdminModuleList() {
         resolve?.(confirmed);
     };
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (!overlapWarningOpen) return;
         const html = document.documentElement;
@@ -278,10 +307,12 @@ export default function AdminModuleList() {
         };
     }, [overlapWarningOpen]);
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => () => {
         overlapDecision.current?.(false);
     }, []);
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [className, setClassName] = useState("");
     const [modules, setModules] = useState<ModuleObject[]>([]);
     const [calendarDate, setCalendarDate] = useState<Date>(new Date());
@@ -303,34 +334,40 @@ export default function AdminModuleList() {
     const [overlapError, setOverlapError] = useState(false);
     const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
 
+    // Parses date for this view.
     const parseDate = (value: string): Date | null => {
         const d = new Date(value);
         return Number.isNaN(d.getTime()) ? null : d;
     };
 
+    // Helper for same day used by this component.
     const sameDay = (a: Date, b: Date): boolean =>
         a.getFullYear() === b.getFullYear() &&
         a.getMonth() === b.getMonth() &&
         a.getDate() === b.getDate();
 
+    // Starts of day for this view.
     const startOfDay = (d: Date): Date => {
         const next = new Date(d);
         next.setHours(0, 0, 0, 0);
         return next;
     };
 
+    // Ends of day for this view.
     const endOfDay = (d: Date): Date => {
         const next = new Date(d);
         next.setHours(23, 59, 59, 999);
         return next;
     };
 
+    // Formats month title for this view.
     const formatMonthTitle = (date: Date): string =>
         new Intl.DateTimeFormat("en-US", {
             month: "long",
             year: "numeric",
         }).format(date);
 
+    // Formats time for this view.
     const formatTime = (value: string): string => {
         const d = parseDate(value);
         if (!d) return value;
@@ -342,6 +379,7 @@ export default function AdminModuleList() {
         }).format(d);
     };
 
+    // Formats short date for this view.
     const formatShortDate = (value: string): string => {
         const d = parseDate(value);
         if (!d) return value;
@@ -352,6 +390,7 @@ export default function AdminModuleList() {
         }).format(d);
     };
 
+    // Formats date12h for this view.
     const formatDate12h = (value: string): string => {
         const d = parseDate(value);
         if (!d) return value;
@@ -366,6 +405,7 @@ export default function AdminModuleList() {
         }).format(d);
     };
 
+    // Returns module status for this view.
     const getModuleStatus = (
         module: ModuleObject,
     ): "active" | "upcoming" | "ended" => {
@@ -378,6 +418,7 @@ export default function AdminModuleList() {
         return now < startMs ? "upcoming" : "ended";
     };
 
+    // Returns module status label for this view.
     const getModuleStatusLabel = (module: ModuleObject): string => {
         const status = getModuleStatus(module);
         if (status === "active") return "Active";
@@ -385,6 +426,7 @@ export default function AdminModuleList() {
         return "Upcoming";
     };
 
+    // Checks module active now for this view.
     const isModuleActiveNow = (m: ModuleObject): boolean => {
         const startMs = Date.parse(m.Start);
         const endMs = Date.parse(m.End);
@@ -394,6 +436,7 @@ export default function AdminModuleList() {
         return now >= startMs && now <= endMs;
     };
 
+    // Helper for module occurs on date used by this component.
     const moduleOccursOnDate = (module: ModuleObject, date: Date): boolean => {
         const start = parseDate(module.Start);
         const end = parseDate(module.End);
@@ -402,9 +445,11 @@ export default function AdminModuleList() {
         return start <= endOfDay(date) && end >= startOfDay(date);
     };
 
+    // Helper for clamp used by this component.
     const clamp = (value: number, min: number, max: number): number =>
         Math.min(Math.max(value, min), max);
 
+    // Returns day index within week for this view.
     const getDayIndexWithinWeek = (date: Date, weekStart: Date): number => {
         const dayMs = 24 * 60 * 60 * 1000;
         return Math.floor(
@@ -412,6 +457,7 @@ export default function AdminModuleList() {
         );
     };
 
+    // Returns module date label for this view.
     const getModuleDateLabel = (module: ModuleObject): string => {
         const start = parseDate(module.Start);
         const end = parseDate(module.End);
@@ -427,6 +473,7 @@ export default function AdminModuleList() {
         return `${formatShortDate(module.Start)}, ${formatTime(module.Start)} - ${formatShortDate(module.End)}, ${formatTime(module.End)}`;
     };
 
+    // Loads class name for this view.
     const loadClassName = () => {
         if (!classId) {
             setClassName("");
@@ -435,7 +482,7 @@ export default function AdminModuleList() {
 
         axios
             .get<ClassAccessResponse>(
-                `${import.meta.env.VITE_API_URL}/class/id/${classId}/access`,
+                `${import.meta.env.VITE_API_URL}/classes/validate_class_access/${classId}`,
                 {
                     headers: authHeader(),
                     params: {
@@ -453,6 +500,7 @@ export default function AdminModuleList() {
             });
     };
 
+    // Loads modules for this view.
     const loadModules = () => {
         if (!classId) {
             setModules([]);
@@ -461,7 +509,7 @@ export default function AdminModuleList() {
 
         axios
             .get(
-                `${import.meta.env.VITE_API_URL}/projects/get_modules_by_class_id?id=${classId}`,
+                `${import.meta.env.VITE_API_URL}/assignment_tracking/get_modules_by_class_id?id=${classId}`,
                 {
                     headers: authHeader(),
                 },
@@ -496,12 +544,14 @@ export default function AdminModuleList() {
             });
     };
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         loadClassName();
         loadModules();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [schoolId, classId]);
 
+    // Recomputes sorted modules only when its dependencies change.
     const sortedModules = useMemo(() => {
         return [...modules].sort((a, b) => {
             const da = Date.parse(a.Start);
@@ -515,6 +565,7 @@ export default function AdminModuleList() {
         });
     }, [modules]);
 
+    // Recomputes module conflict ranges only when its dependencies change.
     const moduleConflictRanges = useMemo<DateRange[]>(() => {
         return modules
             .map((m) => {
@@ -526,6 +577,7 @@ export default function AdminModuleList() {
             .filter((range): range is DateRange => !!range);
     }, [modules]);
 
+    // Returns module conflict ranges for this view.
     const getModuleConflictRanges = (excludedModuleId?: number): DateRange[] => {
         return modules
             .filter((module) => module.Id !== excludedModuleId)
@@ -538,38 +590,46 @@ export default function AdminModuleList() {
             .filter((range): range is DateRange => !!range);
     };
 
+    // Recomputes new module start date only when its dependencies change.
     const newModuleStartDate = useMemo(
         () => parseDateTimeLocal(newModuleStart),
         [newModuleStart],
     );
+    // Recomputes new module end date only when its dependencies change.
     const newModuleEndDate = useMemo(
         () => parseDateTimeLocal(newModuleEnd),
         [newModuleEnd],
     );
+    // Recomputes edit module start date only when its dependencies change.
     const editModuleStartDate = useMemo(
         () => parseDateTimeLocal(editModuleStart),
         [editModuleStart],
     );
+    // Recomputes edit module end date only when its dependencies change.
     const editModuleEndDate = useMemo(
         () => parseDateTimeLocal(editModuleEnd),
         [editModuleEnd],
     );
 
+    // Recomputes highlighted new module dates only when its dependencies change.
     const highlightedNewModuleDates = useMemo(
         () => getDateRangeHighlightDates(newModuleStartDate, newModuleEndDate),
         [newModuleStartDate, newModuleEndDate],
     );
 
+    // Recomputes blocked new module dates only when its dependencies change.
     const blockedNewModuleDates = useMemo(
         () => getFullyBlockedDates(moduleConflictRanges),
         [moduleConflictRanges],
     );
 
+    // Handles new module time colors for this view.
     const handleNewModuleTimeColors = (time: Date): string | null =>
         dateOverlapsRange(time, moduleConflictRanges)
             ? "react-datepicker__time--highlighted-red"
             : null;
 
+    // Updates new module date for this view.
     const setNewModuleDate = (dateValue: string, isStart: boolean) => {
         const finalDate = parseDateTimeLocal(dateValue);
 
@@ -592,6 +652,7 @@ export default function AdminModuleList() {
         );
     };
 
+    // Helper for begin module edit used by this component.
     const beginModuleEdit = (module: ModuleObject) => {
         setShowCreateModule(false);
         setEditingModuleId(module.Id);
@@ -601,6 +662,7 @@ export default function AdminModuleList() {
         setEditOverlapError(false);
     };
 
+    // Cancels module edit for this view.
     const cancelModuleEdit = () => {
         if (savingEditModule) return;
 
@@ -611,6 +673,7 @@ export default function AdminModuleList() {
         setEditOverlapError(false);
     };
 
+    // Updates edit module date for this view.
     const setEditModuleDate = (dateValue: string, isStart: boolean) => {
         const conflictRanges = getModuleConflictRanges(
             editingModuleId ?? undefined,
@@ -632,6 +695,7 @@ export default function AdminModuleList() {
         );
     };
 
+    // Saves module edit for this view.
     const saveModuleEdit = async () => {
         if (savingEditModule || overlapDecision.current) return;
         if (editingModuleId === null) return;
@@ -664,7 +728,7 @@ export default function AdminModuleList() {
         try {
             setSavingEditModule(true);
             await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/update_module`,
+                `${import.meta.env.VITE_API_URL}/assignment_setup/update_module`,
                 {
                     module_id: editingModuleId,
                     name: trimmedName,
@@ -700,6 +764,7 @@ export default function AdminModuleList() {
         }
     };
 
+    // Recomputes calendar days only when its dependencies change.
     const calendarDays = useMemo<CalendarDay[]>(() => {
         const year = calendarDate.getFullYear();
         const month = calendarDate.getMonth();
@@ -723,6 +788,7 @@ export default function AdminModuleList() {
         return days;
     }, [calendarDate]);
 
+    // Recomputes calendar weeks only when its dependencies change.
     const calendarWeeks = useMemo<CalendarWeek[]>(() => {
         const weeks: CalendarWeek[] = [];
 
@@ -785,33 +851,39 @@ export default function AdminModuleList() {
         return weeks;
     }, [calendarDays, sortedModules]);
 
+    // Helper for go to previous month used by this component.
     const goToPreviousMonth = () => {
         setCalendarDate(
             (current) => new Date(current.getFullYear(), current.getMonth() - 1, 1),
         );
     };
 
+    // Helper for go to next month used by this component.
     const goToNextMonth = () => {
         setCalendarDate(
             (current) => new Date(current.getFullYear(), current.getMonth() + 1, 1),
         );
     };
 
+    // Helper for go to today used by this component.
     const goToToday = () => {
         const today = new Date();
         setCalendarDate(new Date(today.getFullYear(), today.getMonth(), 1));
     };
 
+    // Returns admin class base path for this view.
     const getAdminClassBasePath = (): string => {
         return schoolId
             ? `/admin/school/${schoolId}/class/${classId}`
-            : `/admin/${classId}`;
+            : "/schools";
     };
 
+    // Opens module for this view.
     const openModule = (moduleId: number) => {
         navigate(`${getAdminClassBasePath()}/module/${moduleId}/overview`);
     };
 
+    // Handles module card key down for this view.
     const handleModuleCardKeyDown = (
         event: KeyboardEvent<HTMLElement>,
         moduleId: number,
@@ -822,6 +894,7 @@ export default function AdminModuleList() {
         openModule(moduleId);
     };
 
+    // Helper for create module used by this component.
     const createModule = async () => {
         if (savingModule || overlapDecision.current) return;
         const trimmedName = newModuleName.trim();
@@ -850,8 +923,9 @@ export default function AdminModuleList() {
 
         try {
             setSavingModule(true);
+            // Sends this operation and its payload to the server.
             const res = await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/create_module`,
+                `${import.meta.env.VITE_API_URL}/assignment_setup/create_module`,
                 {
                     class_id: Number(classId),
                     name: trimmedName,
@@ -880,6 +954,7 @@ export default function AdminModuleList() {
         }
     };
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div className="projects-page">
             {createPortal(
@@ -903,19 +978,16 @@ export default function AdminModuleList() {
                             onClick={() => closeOverlapWarning(true)}>Continue anyway</button>
                     </div>
                 </dialog>, document.body)}
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>[Admin] MAAT</title>
             </Helmet>
 
+            {/* Displays the navigation and actions available on this page. */}
             <MenuComponent
-                showUpload={false}
-                showAdminUpload={false}
-                showHelp={false}
-                showCreate={false}
-                showLast={false}
-                showReviewButton={false}
             />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={[
                     { label: "School Selection", to: "/schools" },
@@ -929,7 +1001,7 @@ export default function AdminModuleList() {
                         label: "Admin Menu",
                         to: schoolId
                             ? `/admin/school/${schoolId}/class/${classId}/menu`
-                            : `/admin/${classId}/modules`,
+                            : "/schools",
                     },
                     { label: "Module List" },
                 ]}
@@ -940,6 +1012,7 @@ export default function AdminModuleList() {
             </div>
 
             <div className="module-calendar-command-row">
+                {/* Displays the default content import component with the data and callbacks below. */}
                 <DefaultContentImport key={classId} classId={classId} onImported={loadModules}
                     createOpen={showCreateModule}
                     onCreateCustom={() => {
@@ -1064,6 +1137,7 @@ export default function AdminModuleList() {
                                     formatDateTimeLocal(new Date(module.Start)) ||
                                     editModuleEnd !== formatDateTimeLocal(new Date(module.End)));
 
+                            // Renders the interface using the current data and interaction state.
                             return (
                                 <article
                                     className={[
@@ -1275,11 +1349,13 @@ export default function AdminModuleList() {
                                 "--event-rows": maxEventRow,
                             } as CSSProperties;
 
+                            // Renders the interface using the current data and interaction state.
                             return (
                                 <div className="calendar-week" key={week.key} style={weekStyle}>
                                     {week.days.map((day) => {
                                         const today = sameDay(day.date, new Date());
 
+                                        // Renders the interface using the current data and interaction state.
                                         return (
                                             <div
                                                 className={[
@@ -1303,6 +1379,7 @@ export default function AdminModuleList() {
                                                         .map((module) => {
                                                             const active = isModuleActiveNow(module);
 
+                                                            // Renders the interface using the current data and interaction state.
                                                             return (
                                                                 <button
                                                                     type="button"
@@ -1334,6 +1411,7 @@ export default function AdminModuleList() {
                                             {week.segments.map((segment) => {
                                                 const active = isModuleActiveNow(segment.module);
 
+                                                // Renders the interface using the current data and interaction state.
                                                 return (
                                                     <button
                                                         type="button"

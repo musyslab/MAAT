@@ -1,3 +1,4 @@
+// SchoolLoginSelect.tsx: Renders the school login select interface and coordinates its local data and interactions.
 import React, { useEffect, useMemo, useState } from "react";
 
 import axios from "axios";
@@ -7,22 +8,27 @@ import { Navigate, useNavigate } from "react-router-dom";
 import MenuComponent from "../components/MenuComponent";
 import "../../styling/Login.scss";
 
+// Describes the oauth provider data expected by this file.
 type OAuthProvider = "google" | "microsoft";
 
+// Describes the school login option data expected by this file.
 interface SchoolLoginOption {
   id: number;
   name: string;
   auth_provider: OAuthProvider;
 }
 
+// Helper for provider label used by this component.
 function providerLabel(provider: OAuthProvider): string {
   return provider === "google" ? "Google" : "Microsoft";
 }
 
+// Renders the school login select interface and coordinates its local data and interactions.
 function SchoolLoginSelect() {
   const apiBase = (import.meta.env.VITE_API_URL as string) || "";
   const navigate = useNavigate();
 
+  // Keeps the values that drive this component’s display and user interactions in React state.
   const [schools, setSchools] = useState<Array<SchoolLoginOption>>([]);
   const [schoolId, setSchoolId] = useState<number>(-1);
   const [errorMessage, setErrorMessage] = useState<string>("");
@@ -31,16 +37,17 @@ function SchoolLoginSelect() {
   const storedToken = localStorage.getItem("AUTOTA_AUTH_TOKEN");
   const isLoggedIn = Boolean(
     storedToken &&
-      storedToken.trim() &&
-      storedToken.trim().toLowerCase() !== "null" &&
-      storedToken.trim().toLowerCase() !== "undefined"
+    storedToken.trim() &&
+    storedToken.trim().toLowerCase() !== "null" &&
+    storedToken.trim().toLowerCase() !== "undefined"
   );
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     let isMounted = true;
 
     axios
-      .get(`${apiBase}/schools/login-options`)
+      .get(`${apiBase}/schools/get_school_login_options`)
       .then((res) => {
         if (!isMounted) {
           return;
@@ -69,11 +76,13 @@ function SchoolLoginSelect() {
     };
   }, [apiBase]);
 
+  // Recomputes selected school only when its dependencies change.
   const selectedSchool = useMemo(
     () => schools.find((school) => school.id === schoolId) || null,
     [schoolId, schools]
   );
 
+  // Handles submit for this view.
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -86,22 +95,20 @@ function SchoolLoginSelect() {
   };
 
   if (isLoggedIn) {
+    // Renders the interface using the current data and interaction state.
     return <Navigate to="/schools" replace />;
   }
 
+  // Renders the interface using the current data and interaction state.
   return (
     <div className="login-page">
+      {/* Sets the page title and document metadata. */}
       <Helmet>
         <title>Select School | MAAT</title>
       </Helmet>
 
+      {/* Displays the navigation and actions available on this page. */}
       <MenuComponent
-        showUpload={false}
-        showAdminUpload={false}
-        showHelp={false}
-        showCreate={false}
-        showLast={false}
-        showReviewButton={false}
       />
 
       <div className="login-shell">

@@ -1,22 +1,20 @@
+// NotFound.tsx: Renders the not found interface and coordinates its local data and interactions.
 import { Component } from "react";
 import { Helmet } from "react-helmet";
 import MenuComponent from "../components/MenuComponent";
 
 class NotFound extends Component {
     render() {
+        // Renders the interface using the current data and interaction state.
         return (
             <div className="notfound">
+                {/* Sets the page title and document metadata. */}
                 <Helmet>
                     <title>404 Error | MAAT</title>
                 </Helmet>
 
+                {/* Displays the navigation and actions available on this page. */}
                 <MenuComponent
-                    showAdminUpload={false}
-                    showUpload={false}
-                    showHelp={false}
-                    showCreate={false}
-                    showLast={false}
-                    showReviewButton={false}
                 />
 
                 <div className="notfound__grid">

@@ -1,3 +1,4 @@
+// CodeDiffView.tsx: Renders the code diff view interface and coordinates its local data and interactions.
 // frontend/src/pages/components/CodeDiffView.tsx
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
@@ -23,6 +24,7 @@ import {
 // Ensure Prism languages (like Java) are registered once per page load.
 let prismLangsLoaded = false
 let prismLangsPromise: Promise<void> | null = null
+// Helper for ensure prism langs loaded used by this component.
 function ensurePrismLangsLoaded() {
     if (prismLangsLoaded) return Promise.resolve()
     if (prismLangsPromise) return prismLangsPromise
@@ -34,16 +36,23 @@ function ensurePrismLangsLoaded() {
         import('prismjs/components/prism-python'),
     ]).then(() => {
         prismLangsLoaded = true
+    }).catch((error) => {
+        prismLangsPromise = null
+        throw error
     })
 
     return prismLangsPromise
 }
 
+// Describes the diff mode data expected by this file.
 type DiffMode = 'short' | 'long'
+// Describes the diff layout data expected by this file.
 type DiffLayout = 'stacked' | 'side-by-side'
+// Describes the ui log action data expected by this file.
 type UiLogAction = 'Diff Finder' | 'Diff Mode' | 'Diff Layout'
 
-type NewJsonResult = {
+// Describes the testcase result data expected by this file.
+type TestcaseResult = {
     name: string
     order?: number
     passed: boolean
@@ -53,25 +62,12 @@ type NewJsonResult = {
     shortDiffSameAsLong?: boolean
 }
 
-type LegacyJsonTest = {
-    output?: Array<string>
-    type?: number
-    name?: string
-    hidden?: boolean
-    order?: number
+// Describes the testcase payload data expected by this file.
+type TestcasePayload = {
+    results?: TestcaseResult[]
 }
 
-type LegacyJsonResult = {
-    skipped?: boolean
-    passed?: boolean
-    order?: number
-    test?: LegacyJsonTest
-}
-
-type AnyPayload = {
-    results?: any[]
-}
-
+// Describes the diff entry data expected by this file.
 type DiffEntry = {
     id: string
     num: number
@@ -86,11 +82,13 @@ type DiffEntry = {
     hidden: boolean
 }
 
+// Describes the code file data expected by this file.
 type CodeFile = {
     name: string
     content: string
 }
 
+// Describes the testcase input option data expected by this file.
 type TestcaseInputOption = {
     testcase_id: number
     name: string
@@ -101,6 +99,7 @@ type TestcaseInputOption = {
     input: string | null
 }
 
+// Describes the testcase input store data expected by this file.
 type TestcaseInputStore = {
     project_id: number
     checkpoint_id: number
@@ -110,10 +109,13 @@ type TestcaseInputStore = {
     testcases: TestcaseInputOption[]
 }
 
+// Describes the seg data expected by this file.
 type Seg = { text: string; changed: boolean }
 
+// Describes the diff cell kind data expected by this file.
 type DiffCellKind = 'add' | 'del' | 'ctx' | 'meta' | 'add-header' | 'del-header' | 'empty'
 
+// Describes the side by side row data expected by this file.
 type SideBySideRow = {
     key: string
     leftText: string
@@ -122,6 +124,7 @@ type SideBySideRow = {
     rightKind: DiffCellKind
     leftSegs?: Seg[]
     rightSegs?: Seg[]
+    headerReversed?: boolean
 }
 
 const MAX_CHANGE_RATIO_FOR_INTRA = 0.7
@@ -129,6 +132,7 @@ const SHARED_SIDE_SCROLLBAR_EPSILON_PX = 1
 const INPUT_EVENT_PATTERN = /\[\[\[MAAT_INPUT_(?:B64:([A-Za-z0-9_-]*)|HIDDEN)\]\]\]/g
 const HIDDEN_INPUT_EVENT = '[[[MAAT_INPUT_HIDDEN]]]'
 
+// Converts a recorded input event into the values used by the input transcript.
 function decodeInputEvent(encoded: string) {
     try {
         const padded = encoded.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encoded.length / 4) * 4, '=')
@@ -140,6 +144,7 @@ function decodeInputEvent(encoded: string) {
     }
 }
 
+// Renders input transcript for this view.
 function renderInputTranscript(text: string, keyPrefix: string): React.ReactNode {
     if (!text || !text.includes('[[[MAAT_INPUT_')) return text || '\u00A0'
 
@@ -186,121 +191,43 @@ function renderInputTranscript(text: string, keyPrefix: string): React.ReactNode
     return parts
 }
 
+// Hides input events that should not be exposed in the displayed transcript.
 function concealInputEvents(text: string) {
     return (text ?? '').replace(INPUT_EVENT_PATTERN, HIDDEN_INPUT_EVENT)
 }
 
+// Helper for diff mode state label used by this component.
 function diffModeStateLabel(mode: DiffMode) {
     return mode === 'short' ? 'Short' : 'Long'
 }
 
+// Helper for diff layout state label used by this component.
 function diffLayoutStateLabel(layout: DiffLayout) {
     return layout === 'side-by-side' ? 'Side by Side' : 'Vertical'
 }
 
-function normalizeNewlines(text: string) {
-    return (text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+// Identifies changed portions within paired lines so the diff can highlight individual edits.
+function intralineSegments(a: string, b: string): { a: Seg[]; b: Seg[] } | null {
+    if (a.length + b.length > 4000) return null
+    const parts = diffChars(a, b, { timeout: 10 })
+    if (!parts) return null
+    const changed = parts.reduce((total, part) =>
+        total + (part.added || part.removed ? part.value.length : 0), 0)
+    if (changed / Math.max(a.length, b.length, 1) > MAX_CHANGE_RATIO_FOR_INTRA) return null
+
+    const left: Seg[] = []
+    const right: Seg[] = []
+    for (const part of parts) {
+        const segment = { text: part.value, changed: Boolean(part.added || part.removed) }
+        if (!part.added) left.push(segment)
+        if (!part.removed) right.push(segment)
+    }
+    return { a: left, b: right }
 }
 
-function safeJsonParse(maybe: any): any {
-    if (typeof maybe !== 'string') return maybe
-    const s = maybe.trim()
-    if (!s) return maybe
-    if (!(s.startsWith('{') || s.startsWith('['))) return maybe
-    try {
-        return JSON.parse(s)
-    } catch {
-        return maybe
-    }
-}
-
-// Legacy: older grader encoded expected/actual in output blocks
-function parseLegacyOutputs(raw: string): { expected: string; actual: string; hadDiff: boolean } {
-    const txt = raw ?? ''
-    if (txt.includes('~~~diff~~~')) {
-        const [userPart, expectedPart = ''] = txt.split('~~~diff~~~')
-        return { expected: expectedPart, actual: userPart, hadDiff: true }
-    }
-
-    const lines = txt.replace(/\r\n/g, '\n').split('\n')
-    const expectedLines: string[] = []
-    const actualLines: string[] = []
-    let sawDiffMarker = false
-
-    for (const l of lines) {
-        const t = l.trimStart()
-        if (t.startsWith('---')) {
-            sawDiffMarker = true
-            continue
-        }
-        if (t.startsWith('< ')) {
-            expectedLines.push(t.slice(2))
-            sawDiffMarker = true
-            continue
-        }
-        if (t.startsWith('> ')) {
-            actualLines.push(t.slice(2))
-            sawDiffMarker = true
-            continue
-        }
-    }
-
-    if (sawDiffMarker) {
-        return { expected: expectedLines.join('\n'), actual: actualLines.join('\n'), hadDiff: true }
-    }
-    return { expected: '', actual: txt, hadDiff: false }
-}
-
-// Simple unified diff builder (legacy fallback only)
-function buildUnifiedDiffLegacy(expected: string, actual: string, title: string): string {
-    const e = normalizeNewlines(expected).split('\n')
-    const a = normalizeNewlines(actual).split('\n')
-    const lines: string[] = []
-    lines.push(`--- actual:${title}`)
-    lines.push(`+++ expected:${title}`)
-    const max = Math.max(e.length, a.length)
-    for (let i = 0; i < max; i++) {
-        const el = e[i] ?? ''
-        const al = a[i] ?? ''
-        if (el === al) {
-            lines.push(` ${el}`)
-        } else {
-            if (al !== '') lines.push(`-${al}`)
-            if (el !== '') lines.push(`+${el}`)
-            if (el === '' && al === '') lines.push(' ')
-        }
-    }
-    return lines.join('\n')
-}
-
-function intralineSegments(a: string, b: string): { a: Seg[]; b: Seg[] } {
-    const parts = diffChars(a ?? '', b ?? '')
-    const A: Seg[] = []
-    const B: Seg[] = []
-    for (const p of parts) {
-        if ((p as any).added) {
-            B.push({ text: (p as any).value, changed: true })
-        } else if ((p as any).removed) {
-            A.push({ text: (p as any).value, changed: true })
-        } else {
-            A.push({ text: (p as any).value, changed: false })
-            B.push({ text: (p as any).value, changed: false })
-        }
-    }
-    return { a: A, b: B }
-}
-
-function areSimilarForIntra(a: string, b: string): boolean {
-    const parts = diffChars(a ?? '', b ?? '')
-    let changed = 0
-    const total = Math.max((a ?? '').length, (b ?? '').length, 1)
-    for (const p of parts) {
-        if ((p as any).added || (p as any).removed) changed += (p as any).value.length
-    }
-    return changed / total <= MAX_CHANGE_RATIO_FOR_INTRA
-}
-
+// Renders segs for this view.
 function renderSegs(segs: Seg[], cls: 'add-ch' | 'del-ch') {
+    // Renders the interface using the current data and interaction state.
     return segs.map((seg, idx) =>
         seg.changed ? (
             <span key={idx} className={`intra ${cls}`}>
@@ -312,6 +239,7 @@ function renderSegs(segs: Seg[], cls: 'add-ch' | 'del-ch') {
     )
 }
 
+// Describes the diff view props data expected by this file.
 type DiffViewProps = {
     submissionId: number
     classId: number
@@ -345,6 +273,7 @@ type DiffViewProps = {
     allowTestcaseInputPurchases?: boolean
 }
 
+// Displays submission code and test-case differences with selectable layouts.
 export default function DiffView(props: DiffViewProps) {
     const {
         submissionId,
@@ -369,14 +298,21 @@ export default function DiffView(props: DiffViewProps) {
         practiceProblemId = null,
     } = props
 
+    // Keeps internal code container ref available across renders without triggering a state update.
     const internalCodeContainerRef = useRef<HTMLDivElement | null>(null)
     const effectiveCodeContainerRef = codeContainerRef ?? internalCodeContainerRef
 
+    // Keeps side by side left ref available across renders without triggering a state update.
     const sideBySideLeftRef = useRef<HTMLDivElement | null>(null)
+    // Keeps side by side right ref available across renders without triggering a state update.
     const sideBySideRightRef = useRef<HTMLDivElement | null>(null)
+    // Keeps side by side bar ref available across renders without triggering a state update.
     const sideBySideBarRef = useRef<HTMLDivElement | null>(null)
+    // Keeps side by side left content ref available across renders without triggering a state update.
     const sideBySideLeftContentRef = useRef<HTMLDivElement | null>(null)
+    // Keeps side by side right content ref available across renders without triggering a state update.
     const sideBySideRightContentRef = useRef<HTMLDivElement | null>(null)
+    // Keeps syncing side scroll ref available across renders without triggering a state update.
     const syncingSideScrollRef = useRef(false)
 
     const copyBlockHandlers = disableCopy
@@ -386,8 +322,9 @@ export default function DiffView(props: DiffViewProps) {
         }
         : {}
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [testsLoaded, setTestsLoaded] = useState(false)
-    const [payload, setPayload] = useState<AnyPayload>({ results: [] })
+    const [payload, setPayload] = useState<TestcasePayload>({ results: [] })
     const [testcaseInputStore, setTestcaseInputStore] = useState<TestcaseInputStore | null>(null)
     const [selectedTestcaseInputId, setSelectedTestcaseInputId] = useState<number | null>(null)
     const [testcaseInputStoreLoaded, setTestcaseInputStoreLoaded] = useState(false)
@@ -397,10 +334,16 @@ export default function DiffView(props: DiffViewProps) {
 
     // Force a rerender after Prism languages load so Highlight can use the grammar.
     const [, forcePrismRefresh] = useState(0)
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
-        ensurePrismLangsLoaded().then(() => forcePrismRefresh((v) => v + 1))
+        let cancelled = false
+        ensurePrismLangsLoaded()
+            .then(() => { if (!cancelled) forcePrismRefresh((v) => v + 1) })
+            .catch(() => { /* Existing grammars remain usable if optional imports fail. */ })
+        return () => { cancelled = true }
     }, [])
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [codeFiles, setCodeFiles] = useState<CodeFile[]>([])
     const [selectedCodeFile, setSelectedCodeFile] = useState<string>('')
 
@@ -410,11 +353,24 @@ export default function DiffView(props: DiffViewProps) {
 
     // Intra-line highlight toggle
     const initialIntraRef = useRef<boolean>(true)
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [intraEnabled, setIntraEnabled] = useState<boolean>(initialIntraRef.current)
 
     // Track which (submissionId,classId) we've already logged to avoid duplicate logs (React StrictMode)
     const initLogKeyRef = useRef<string | null>(null)
+    const currentScope = `${submissionId}:${classId}:${isPractice}:${practiceProblemId}`
+    const currentScopeRef = useRef(currentScope)
+    currentScopeRef.current = currentScope
+    const purchaseInFlightRef = useRef(false)
+    const mountedRef = useRef(false)
+    useEffect(() => {
+        mountedRef.current = true
+        purchaseInFlightRef.current = false
+        setIsPurchasingTestcaseInput(false)
+        return () => { mountedRef.current = false }
+    }, [currentScope])
 
+    // Helper for log ui click used by this component.
     const logUiClick = (
         action: UiLogAction,
         startedState?: boolean,
@@ -422,9 +378,9 @@ export default function DiffView(props: DiffViewProps) {
         nextStateLabel?: string
     ) => {
         const shouldLogStarted = action === 'Diff Finder'
-        if (submissionId < 0 || classId < 0) return
+        if (submissionId <= 0 || classId <= 0) return
         axios.post(
-            `${import.meta.env.VITE_API_URL}/submissions/log_ui`,
+            `${import.meta.env.VITE_API_URL}/submissions/log_ui_click`,
             {
                 id: submissionId,
                 class_id: classId,
@@ -436,9 +392,10 @@ export default function DiffView(props: DiffViewProps) {
                 practice_problem_id: practiceProblemId,
             },
             { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
-        )
+        ).catch(() => { /* Audit logging must not interrupt the view. */ })
     }
 
+    // Keeps the two code panes aligned while the user scrolls.
     const syncSideBySideScroll = (source: 'left' | 'right' | 'bar') => {
         if (syncingSideScrollRef.current) return
 
@@ -469,6 +426,7 @@ export default function DiffView(props: DiffViewProps) {
         })
     }
 
+    // Returns side by side content width for this view.
     const getSideBySideContentWidth = (
         pane: HTMLDivElement | null,
         content: HTMLDivElement | null
@@ -488,10 +446,11 @@ export default function DiffView(props: DiffViewProps) {
             content?.scrollWidth ?? 0,
             content?.offsetWidth ?? 0,
             content?.getBoundingClientRect().width ?? 0,
-            ...cellWidths
+            cellWidths.reduce((largest, width) => Math.max(largest, width), 0)
         )
     }
 
+    // Measures the diff content so the shared horizontal scrollbar matches its width.
     const updateSharedSideScrollMetrics = () => {
         const left = sideBySideLeftRef.current
         const right = sideBySideRightRef.current
@@ -527,22 +486,24 @@ export default function DiffView(props: DiffViewProps) {
         if (bar.scrollLeft > maxBarScrollLeft) bar.scrollLeft = maxBarScrollLeft
     }
 
-    const fetchTestcaseDiffPayload = useCallback(() =>
+    // Keeps the fetch testcase diff payload callback stable until its dependencies change.
+    const fetchTestcaseDiffPayload = useCallback((signal?: AbortSignal) =>
         axios
             .get(
-                `${import.meta.env.VITE_API_URL}/submissions/testcaseerrors?id=${submissionId}&class_id=${classId}` +
+                `${import.meta.env.VITE_API_URL}/submissions/get_testcase_errors?id=${submissionId}&class_id=${classId}` +
                 `&practice=${isPractice ? 1 : 0}` +
                 (practiceProblemId != null ? `&practice_problem_id=${practiceProblemId}` : ``),
                 {
                     headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
+                    signal,
                 }
             )
             .then((res) => {
-                const maybe = safeJsonParse(res.data)
-                return (maybe && typeof maybe === 'object' ? maybe : { results: [] }) as AnyPayload
+                return res.data as TestcasePayload
             }),
         [submissionId, classId, isPractice, practiceProblemId])
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         setTestsLoaded(false)
         setPayload({ results: [] })
@@ -556,18 +517,24 @@ export default function DiffView(props: DiffViewProps) {
             return
         }
 
-        fetchTestcaseDiffPayload()
+        let cancelled = false
+        const controller = new AbortController()
+        fetchTestcaseDiffPayload(controller.signal)
             .then((nextPayload) => {
+                if (cancelled) return
                 setPayload(nextPayload)
                 setTestsLoaded(true)
             })
             .catch((err) => {
+                if (cancelled) return
                 console.log(err)
                 setPayload({ results: [] })
                 setTestsLoaded(true)
             })
+        return () => { cancelled = true; controller.abort() }
     }, [submissionId, classId, isPractice, practiceProblemId, fetchTestcaseDiffPayload])
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         setTestcaseInputStore(null)
         setSelectedTestcaseInputId(null)
@@ -580,10 +547,12 @@ export default function DiffView(props: DiffViewProps) {
             return
         }
 
+        const controller = new AbortController()
         axios
             .get(
-                `${import.meta.env.VITE_API_URL}/submissions/testcase-inputs`,
+                `${import.meta.env.VITE_API_URL}/submissions/testcase_inputs`,
                 {
+                    signal: controller.signal,
                     params: {
                         id: submissionId,
                         class_id: classId,
@@ -592,6 +561,7 @@ export default function DiffView(props: DiffViewProps) {
                 }
             )
             .then((res) => {
+                if (controller.signal.aborted) return
                 const store = res.data as TestcaseInputStore
                 const testcases = Array.isArray(store?.testcases) ? store.testcases : []
                 const normalizedStore = { ...store, testcases }
@@ -605,16 +575,18 @@ export default function DiffView(props: DiffViewProps) {
                 setTestcaseInputStoreLoaded(true)
             })
             .catch((err) => {
+                if (axios.isCancel(err)) return
                 setTestcaseInputPurchaseError(
                     err?.response?.data?.message || 'Could not load testcase input options.'
                 )
                 setTestcaseInputStoreLoaded(true)
             })
+        return () => controller.abort()
     }, [allowTestcaseInputPurchases, submissionId, classId])
 
     // Baseline the toggles on mount per submission/class
     useEffect(() => {
-        if (submissionId < 0 || classId < 0) return
+        if (submissionId <= 0 || classId <= 0) return
         const key = `${submissionId}:${classId}`
         if (initLogKeyRef.current === key) return
         initLogKeyRef.current = key
@@ -639,6 +611,7 @@ export default function DiffView(props: DiffViewProps) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [submissionId, classId, isPractice, practiceProblemId])
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         if (submissionId < 0 || classId < 0) {
             setCodeFiles([{ name: 'Submission', content: '' }])
@@ -646,17 +619,18 @@ export default function DiffView(props: DiffViewProps) {
             return
         }
 
+        const controller = new AbortController()
         axios
             .get(
                 `${import.meta.env.VITE_API_URL}/submissions/codefinder?id=${submissionId}&class_id=${classId}&format=json` +
                 `&practice=${isPractice ? 1 : 0}` +
                 (practiceProblemId != null ? `&practice_problem_id=${practiceProblemId}` : ``),
-                { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
+                { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` }, signal: controller.signal }
             )
             .then((res) => {
-                const data = safeJsonParse(res.data) as any
+                if (controller.signal.aborted) return
+                const data = res.data as { files?: CodeFile[] }
 
-                // New shape: { files: [{ name, content }, ...] }
                 if (data && typeof data === 'object' && Array.isArray(data.files)) {
                     const files: CodeFile[] = data.files
                         .filter((f: any) => f && typeof f.name === 'string')
@@ -669,109 +643,55 @@ export default function DiffView(props: DiffViewProps) {
                     return
                 }
 
-                // Backward compat: old endpoint returned a single string
-                if (typeof data === 'string') {
-                    setCodeFiles([{ name: 'Submission', content: data }])
-                    setSelectedCodeFile('Submission')
-                    return
-                }
-
-                // Last-resort fallback
                 setCodeFiles([{ name: 'Submission', content: '' }])
                 setSelectedCodeFile('Submission')
             })
             .catch((err) => {
+                if (axios.isCancel(err)) return
                 console.log(err)
                 setCodeFiles([{ name: 'Submission', content: '' }])
                 setSelectedCodeFile('Submission')
             })
+        return () => controller.abort()
     }, [submissionId, classId, isPractice, practiceProblemId])
 
+    // Recomputes diff files all only when its dependencies change.
     const diffFilesAll: DiffEntry[] = useMemo(() => {
         const raw = Array.isArray(payload?.results) ? payload.results : []
         const entries: DiffEntry[] = []
 
-        const looksNew =
-            raw.length > 0 &&
-            raw.some((r: any) => r && typeof r === 'object' && ('shortDiff' in r || 'longDiff' in r || 'name' in r))
-
-        if (looksNew) {
-            raw.forEach((r: any, idx: number) => {
-                const rr = (r ?? {}) as NewJsonResult
-                const testName = String(rr.name ?? `Test ${idx + 1}`)
-                const passed = Boolean(rr.passed)
-                const hidden = Boolean((rr as any).hidden)
-                const shortDiff = String(rr.shortDiff ?? '')
-                const longDiff = String(rr.longDiff ?? '')
-                const shortDiffSameAsLong = Boolean((rr as any).shortDiffSameAsLong)
-                const parsedOrder = Number(rr.order)
-                const order = Number.isFinite(parsedOrder) && parsedOrder > 0
-                    ? parsedOrder
-                    : idx + 1
-                entries.push({
-                    id: `${idx}__${testName}`,
-                    num: idx + 1,
-                    order,
-                    test: testName,
-                    status: passed ? 'Passed' : 'Failed',
-                    passed,
-                    skipped: false,
-                    shortDiff,
-                    longDiff,
-                    shortDiffSameAsLong,
-                    hidden,
-                })
-            })
-            return entries
-                .sort((a, b) => a.order - b.order || a.num - b.num)
-                .map((entry, index) => ({ ...entry, num: index + 1 }))
-        }
-
-        // Legacy fallback (should be rare now): convert old shape into unified-ish diffs
-        raw.forEach((r: any, idx: number) => {
-            const rr = (r ?? {}) as LegacyJsonResult
-            const skipped = Boolean(rr.skipped)
+        raw.forEach((r, idx: number) => {
+            const rr = (r ?? {}) as TestcaseResult
+            const testName = String(rr.name ?? `Test ${idx + 1}`)
             const passed = Boolean(rr.passed)
-            const t = rr.test ?? {}
-            const testName = String(t.name ?? `Test ${idx + 1}`)
-            const hidden = Boolean((t as any).hidden)
-            const parsedOrder = Number(rr.order ?? t.order)
+            const hidden = Boolean(rr.hidden)
+            const shortDiff = String(rr.shortDiff ?? '')
+            const longDiff = String(rr.longDiff ?? '')
+            const shortDiffSameAsLong = Boolean(rr.shortDiffSameAsLong)
+            const parsedOrder = Number(rr.order)
             const order = Number.isFinite(parsedOrder) && parsedOrder > 0
                 ? parsedOrder
                 : idx + 1
-            const rawOut = (skipped ? ['This test did not run due to a configuration issue.'] : (t.output || [])).join(
-                '\n'
-            )
-            const { expected, actual, hadDiff } = parseLegacyOutputs(rawOut)
-            const unified = buildUnifiedDiffLegacy(expected, actual, testName)
-
             entries.push({
                 id: `${idx}__${testName}`,
                 num: idx + 1,
                 order,
                 test: testName,
-                status: skipped ? 'Skipped' : passed ? 'Passed' : 'Failed',
+                status: passed ? 'Passed' : 'Failed',
                 passed,
-                skipped,
-                shortDiff: passed ? '' : unified,
-                longDiff: passed ? '' : unified,
-                shortDiffSameAsLong: !passed && !skipped,
+                skipped: false,
+                shortDiff,
+                longDiff,
+                shortDiffSameAsLong,
                 hidden,
             })
-
-            // If there was no explicit diff, still show something readable
-            if (!passed && !skipped && !hadDiff && !unified.trim()) {
-                entries[entries.length - 1].shortDiff = buildUnifiedDiffLegacy('', rawOut, testName)
-                entries[entries.length - 1].longDiff = entries[entries.length - 1].shortDiff
-                entries[entries.length - 1].shortDiffSameAsLong = true
-            }
         })
-
         return entries
             .sort((a, b) => a.order - b.order || a.num - b.num)
             .map((entry, index) => ({ ...entry, num: index + 1 }))
     }, [payload])
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (diffFilesAll.length === 0) {
             if (selectedDiffId !== null) setSelectedDiffId(null)
@@ -782,11 +702,13 @@ export default function DiffView(props: DiffViewProps) {
         }
     }, [diffFilesAll, selectedDiffId])
 
+    // Recomputes selected file only when its dependencies change.
     const selectedFile = useMemo(
         () => diffFilesAll.find((f) => f.id === selectedDiffId) || null,
         [diffFilesAll, selectedDiffId]
     )
 
+    // Recomputes visible testcase input options only when its dependencies change.
     const visibleTestcaseInputOptions = useMemo(
         () =>
             (testcaseInputStore?.testcases ?? []).filter(
@@ -795,6 +717,7 @@ export default function DiffView(props: DiffViewProps) {
         [testcaseInputStore]
     )
 
+    // Recomputes selected testcase input only when its dependencies change.
     const selectedTestcaseInput = useMemo(
         () =>
             visibleTestcaseInputOptions.find(
@@ -803,6 +726,7 @@ export default function DiffView(props: DiffViewProps) {
         [visibleTestcaseInputOptions, selectedTestcaseInputId]
     )
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (
             selectedTestcaseInputId !== null &&
@@ -826,25 +750,29 @@ export default function DiffView(props: DiffViewProps) {
     )
     const testcaseInputStarLabel = testcaseInputCost === 1 ? 'star' : 'stars'
 
+    // Formats star count for this view.
     const formatStarCount = (value: number) =>
         `${value} ${value === 1 ? 'star' : 'stars'}`
 
+    // Helper for purchase selected testcase input used by this component.
     const purchaseSelectedTestcaseInput = () => {
         if (
             !selectedTestcaseInput ||
             selectedTestcaseInput.purchased ||
             !selectedTestcaseInput.purchase_eligible ||
-            isPurchasingTestcaseInput
+            purchaseInFlightRef.current
         ) {
             return
         }
 
+        const isCurrent = () => mountedRef.current && currentScopeRef.current === currentScope
+        purchaseInFlightRef.current = true
         setIsPurchasingTestcaseInput(true)
         setTestcaseInputPurchaseError('')
 
         axios
             .post(
-                `${import.meta.env.VITE_API_URL}/submissions/testcase-inputs`,
+                `${import.meta.env.VITE_API_URL}/submissions/testcase_inputs`,
                 {
                     submission_id: submissionId,
                     class_id: classId,
@@ -855,6 +783,7 @@ export default function DiffView(props: DiffViewProps) {
                 }
             )
             .then((res) => {
+                if (!isCurrent()) return;
                 const store = res.data as TestcaseInputStore
                 setTestcaseInputStore({
                     ...store,
@@ -862,14 +791,16 @@ export default function DiffView(props: DiffViewProps) {
                 })
                 setInputPurchaseConfirmationOpen(false)
                 fetchTestcaseDiffPayload()
-                    .then((nextPayload) => setPayload(nextPayload))
+                    .then((nextPayload) => { if (isCurrent()) setPayload(nextPayload) })
                     .catch(() => {
+                        if (!isCurrent()) return;
                         setTestcaseInputPurchaseError(
                             'The input was revealed, but the diff could not refresh. Reload the page to view it.'
                         )
                     })
             })
             .catch((err) => {
+                if (!isCurrent()) return;
                 const nextBalance = Number(err?.response?.data?.star_balance)
                 if (Number.isFinite(nextBalance)) {
                     setTestcaseInputStore((current) =>
@@ -885,10 +816,13 @@ export default function DiffView(props: DiffViewProps) {
                 setInputPurchaseConfirmationOpen(false)
             })
             .finally(() => {
+                if (!isCurrent()) return;
+                purchaseInFlightRef.current = false
                 setIsPurchasingTestcaseInput(false)
             })
     }
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (!onActiveTestcaseChange) return
         if (!selectedFile) return
@@ -901,12 +835,14 @@ export default function DiffView(props: DiffViewProps) {
         })
     }, [selectedFile, onActiveTestcaseChange])
 
+    // Recomputes show layout toggle only when its dependencies change.
     const showLayoutToggle = useMemo(() => {
         if (!selectedFile || selectedFile.passed) return false
         if (selectedFile.hidden && !revealHiddenOutput) return false
         return true
     }, [selectedFile, revealHiddenOutput])
 
+    // Recomputes show diff mode toggle only when its dependencies change.
     const showDiffModeToggle = useMemo(() => {
         if (!selectedFile || selectedFile.passed) return false
         if (selectedFile.hidden && !revealHiddenOutput) return false
@@ -921,6 +857,7 @@ export default function DiffView(props: DiffViewProps) {
         }
     }, [selectedFile, diffMode])
 
+    // Recomputes selected testcase input for diff only when its dependencies change.
     const selectedTestcaseInputForDiff = useMemo(
         () =>
             (testcaseInputStore?.testcases ?? []).find(
@@ -929,6 +866,7 @@ export default function DiffView(props: DiffViewProps) {
         [testcaseInputStore, selectedFile]
     )
 
+    // Recomputes selected diff text only when its dependencies change.
     const selectedDiffText = useMemo(() => {
         if (!selectedFile) return ''
         if (selectedFile.passed) return ''
@@ -951,6 +889,7 @@ export default function DiffView(props: DiffViewProps) {
         selectedTestcaseInputForDiff,
     ])
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (diffLayout !== 'side-by-side') return
 
@@ -959,6 +898,20 @@ export default function DiffView(props: DiffViewProps) {
         if (sideBySideBarRef.current) sideBySideBarRef.current.scrollLeft = 0
     }, [diffLayout, selectedDiffId, diffMode])
 
+    // Reuse each character comparison across the toggle and both layouts.
+    const intraCache = useMemo(() => ({ values: new Map<string, ReturnType<typeof intralineSegments>>(), deadline: 0 }), [selectedDiffText])
+    // Keeps the get intraline segments callback stable until its dependencies change.
+    const getIntralineSegments = useCallback((left: string, right: string) => {
+        if (left.length + right.length > 4000) return null
+        const key = JSON.stringify([left, right])
+        if (intraCache.values.has(key)) return intraCache.values.get(key) ?? null
+        if (!intraCache.deadline) intraCache.deadline = performance.now() + 100
+        const result = performance.now() < intraCache.deadline ? intralineSegments(left, right) : null
+        intraCache.values.set(key, result)
+        return result
+    }, [intraCache])
+
+    // Recomputes has intra in selected only when its dependencies change.
     const hasIntraInSelected = useMemo(() => {
         if (!selectedFile || selectedFile.passed) return false
         if (selectedFile.hidden && !revealHiddenOutput) return false
@@ -979,11 +932,12 @@ export default function DiffView(props: DiffViewProps) {
 
             const delText = (isSingleDel ? line : next).slice(1)
             const addText = (isSingleDel ? next : line).slice(1)
-            if (areSimilarForIntra(delText, addText)) return true
+            if (getIntralineSegments(delText, addText)) return true
         }
         return false
-    }, [selectedFile, selectedDiffText, revealHiddenOutput])
+    }, [selectedFile, selectedDiffText, revealHiddenOutput, getIntralineSegments])
 
+    // Recomputes side by side rows only when its dependencies change.
     const sideBySideRows = useMemo<SideBySideRow[]>(() => {
         const txt = selectedDiffText || ''
         if (!txt.trim()) return []
@@ -1010,6 +964,7 @@ export default function DiffView(props: DiffViewProps) {
             if (line.startsWith('+++') && next.startsWith('---')) {
                 rows.push({
                     key: `hdr-${i}`,
+                    headerReversed: true,
                     leftText: next,
                     rightText: line,
                     leftKind: 'del-header',
@@ -1064,8 +1019,9 @@ export default function DiffView(props: DiffViewProps) {
                 const delText = delLine.slice(1)
                 const addText = addLine.slice(1)
 
-                if (intraEnabled && areSimilarForIntra(delText, addText)) {
-                    const { a, b } = intralineSegments(delText, addText)
+                const segments = intraEnabled ? getIntralineSegments(delText, addText) : null
+                if (segments) {
+                    const { a, b } = segments
                     rows.push({
                         key: `pair-${i}`,
                         leftText: delLine,
@@ -1121,7 +1077,7 @@ export default function DiffView(props: DiffViewProps) {
         }
 
         return rows
-    }, [selectedDiffText, intraEnabled])
+    }, [selectedDiffText, intraEnabled, getIntralineSegments])
 
     useLayoutEffect(() => {
         if (diffLayout !== 'side-by-side') return
@@ -1132,6 +1088,7 @@ export default function DiffView(props: DiffViewProps) {
         let frame2 = 0
         const timeouts: number[] = []
 
+        // Refreshes metrics for this view.
         const refreshMetrics = () => {
             if (cancelled) return
             updateSharedSideScrollMetrics()
@@ -1191,6 +1148,7 @@ export default function DiffView(props: DiffViewProps) {
         }
     }, [diffLayout, selectedDiffId, selectedDiffText, intraEnabled, sideBySideRows.length])
 
+    // Recomputes selected code only when its dependencies change.
     const selectedCode = useMemo(() => {
         if (codeFiles.length === 0) return null
         return codeFiles.find((f) => f.name === selectedCodeFile) ?? codeFiles[0]
@@ -1206,11 +1164,13 @@ export default function DiffView(props: DiffViewProps) {
 
     const isLineClickable = Boolean(onLineMouseDown)
 
+    // Renders side by side cell for this view.
     const renderSideBySideCell = (text: string, kind: DiffCellKind, segs?: Seg[]) => {
         if (kind === 'empty') return <span className="sbs-placeholder">{'\u00A0'}</span>
 
         if (kind === 'add' || kind === 'del') {
             const rawText = text.slice(1)
+            // Renders the interface using the current data and interaction state.
             return (
                 <>
                     <span className="diff-sign">{kind === 'add' ? '+' : '-'}</span>
@@ -1224,99 +1184,51 @@ export default function DiffView(props: DiffViewProps) {
         return renderInputTranscript(text, `side-${kind}`)
     }
 
+    // Renders stacked diff for this view.
     const renderStackedDiff = () => {
-        const txt = selectedDiffText || ''
-        if (!txt.trim()) {
+        if (sideBySideRows.length === 0) {
+            // Renders the interface using the current data and interaction state.
             return <div className="muted">No diff text was provided for this test in {diffMode}.</div>
         }
 
-        const lines = txt.split('\n')
-        const out: JSX.Element[] = []
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i] ?? ''
-
-            // Headers/hunks first so they never pair or get intra
-            if (line.startsWith('---') || line.startsWith('+++') || line.startsWith('@@')) {
-                const headerCls = line.startsWith('---')
-                    ? 'del header'
-                    : line.startsWith('+++')
-                        ? 'add header'
-                        : 'meta header'
-                out.push(
-                    <div key={i} className={`diff-line ${headerCls}`}>
-                        {line || ' '}
+        // Renders the interface using the current data and interaction state.
+        return sideBySideRows.flatMap((row) => {
+            // Renders cell for this view.
+            const renderCell = (text: string, kind: DiffCellKind, segs?: Seg[]) => {
+                const cls = kind === 'del-header' ? 'del header'
+                    : kind === 'add-header' ? 'add header'
+                    : kind === 'meta' ? 'meta header' : kind
+                const paired = row.leftKind === 'del' && row.rightKind === 'add'
+                // Renders the interface using the current data and interaction state.
+                return (
+                    <div key={`${row.key}-${kind}`} className={`diff-line ${cls}`}>
+                        {paired ? (
+                            <><span className="diff-sign">{kind === 'del' ? '-' : '+'}</span>
+                                {segs ? renderSegs(segs, kind === 'del' ? 'del-ch' : 'add-ch')
+                                    : renderInputTranscript(text.slice(1), `stacked-${row.key}-${kind}`)}</>
+                        ) : renderInputTranscript(text, `stacked-${row.key}-${kind}`)}
                     </div>
                 )
-                continue
             }
 
-            const type = line[0]
-            const content = line.slice(1)
-            const next = lines[i + 1] ?? ''
-
-            const isSingleAdd = line.startsWith('+') && !line.startsWith('+++')
-            const isSingleDel = line.startsWith('-') && !line.startsWith('---')
-            const nextIsSingleAdd = next.startsWith('+') && !next.startsWith('+++')
-            const nextIsSingleDel = next.startsWith('-') && !next.startsWith('---')
-            const pairable = (isSingleDel && nextIsSingleAdd) || (isSingleAdd && nextIsSingleDel)
-
-            if (pairable) {
-                const otherContent = next.slice(1)
-                const addText = type === '-' ? otherContent : content
-                const delText = type === '-' ? content : otherContent
-
-                if (!intraEnabled || !areSimilarForIntra(delText, addText)) {
-                    out.push(
-                        <div key={`d-${i}`} className="diff-line del">
-                            <span className="diff-sign">-</span>
-                            {renderInputTranscript(delText, `stacked-del-${i}`)}
-                        </div>
-                    )
-                    out.push(
-                        <div key={`a-${i + 1}`} className="diff-line add">
-                            <span className="diff-sign">+</span>
-                            {renderInputTranscript(addText, `stacked-add-${i}`)}
-                        </div>
-                    )
-                    i++
-                    continue
-                }
-
-                const { a, b } = intralineSegments(delText, addText)
-                out.push(
-                    <div key={`d-${i}`} className="diff-line del">
-                        <span className="diff-sign">-</span>
-                        {renderSegs(a, 'del-ch')}
-                    </div>
-                )
-                out.push(
-                    <div key={`a-${i + 1}`} className="diff-line add">
-                        <span className="diff-sign">+</span>
-                        {renderSegs(b, 'add-ch')}
-                    </div>
-                )
-                i++
-                continue
+            if (row.leftKind === 'ctx' || row.leftKind === 'meta') {
+                return [renderCell(row.leftText, row.leftKind)]
             }
-
-            const cls = line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : 'ctx'
-
-            out.push(
-                <div key={i} className={`diff-line ${cls}`}>
-                    {renderInputTranscript(line, `stacked-line-${i}`)}
-                </div>
-            )
-        }
-
-        return out
+            const cells: React.ReactElement[] = []
+            if (row.leftKind !== 'empty') cells.push(renderCell(row.leftText, row.leftKind, row.leftSegs))
+            if (row.rightKind !== 'empty') cells.push(renderCell(row.rightText, row.rightKind, row.rightSegs))
+            return row.headerReversed ? cells.reverse() : cells
+        })
     }
 
+    // Renders side by side diff for this view.
     const renderSideBySideDiff = () => {
         if (sideBySideRows.length === 0) {
+            // Renders the interface using the current data and interaction state.
             return <div className="muted">No diff text was provided for this test in {diffMode}.</div>
         }
 
+        // Renders the interface using the current data and interaction state.
         return (
             <div className="diff-content side-by-side">
                 <div className="diff-side-by-side-shell" role="region" aria-label="Side-by-side testcase diff">
@@ -1365,6 +1277,7 @@ export default function DiffView(props: DiffViewProps) {
         )
     }
 
+    // Renders diff view section for this view.
     const renderDiffViewSection = () => (
         <section
             className={`diff-view ${disableCopy ? 'no-user-select' : ''}`}
@@ -1644,6 +1557,7 @@ export default function DiffView(props: DiffViewProps) {
         </section>
     )
 
+    // Renders code section for this view.
     const renderCodeSection = () => (
         <Highlight theme={themes.vsLight} code={codeText} language={language as any}>
             {({ style, tokens, getLineProps, getTokenProps }) => (
@@ -1657,11 +1571,12 @@ export default function DiffView(props: DiffViewProps) {
                     <ol className="code-list" style={style}>
                         {tokens.map((line, i) => {
                             const lineNo = i + 1
-                            const { key: lineKey, ...lineProps } = getLineProps({ line, key: i })
+                            const { key: _lineKey, ...lineProps } = getLineProps({ line, key: i })
                             const extraCls = getLineClassName ? getLineClassName(lineNo) : ''
+                            // Renders the interface using the current data and interaction state.
                             return (
                                 <li
-                                    key={lineKey ?? lineNo}
+                                    key={lineNo}
                                     ref={(el) => {
                                         if (lineRefs) lineRefs.current[lineNo] = el
                                     }}
@@ -1680,8 +1595,9 @@ export default function DiffView(props: DiffViewProps) {
                                     </span>
                                     <span className="code-text">
                                         {line.map((token, key) => {
-                                            const { key: tokenKey, ...tokenProps } = getTokenProps({ token, key })
-                                            return <span key={tokenKey ?? key} {...tokenProps} />
+                                            const { key: _tokenKey, ...tokenProps } = getTokenProps({ token, key })
+                                            // Renders the interface using the current data and interaction state.
+                                            return <span key={key} {...tokenProps} />
                                         })}
                                     </span>
                                 </li>
@@ -1693,6 +1609,7 @@ export default function DiffView(props: DiffViewProps) {
         </Highlight>
     )
 
+    // Renders the interface using the current data and interaction state.
     return (
         <>
             {rightPanel ? (

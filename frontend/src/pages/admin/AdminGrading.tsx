@@ -1,5 +1,6 @@
+// AdminGrading.tsx: Displays a submission and manages grading deductions, code selections, and saved feedback.
 // AdminGrading.tsx
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Helmet } from 'react-helmet'
@@ -13,6 +14,7 @@ import { FiTrendingUp, FiChevronLeft, FiChevronRight, FiSave, FiUser, FiX, FiChe
 
 const defaultpagenumber = -1
 
+// Describes the error option data expected by this file.
 type ErrorOption = {
     id: string
     label: string
@@ -20,6 +22,7 @@ type ErrorOption = {
     points: number
 }
 
+// Describes the observed error data expected by this file.
 type ObservedError = {
     startLine: number
     endLine: number
@@ -28,13 +31,16 @@ type ObservedError = {
     note?: string
 }
 
+// Describes the line range data expected by this file.
 type LineRange = {
     start: number
     end: number
 }
 
+// Describes the scoring mode data expected by this file.
 type ScoringMode = 'perInstance' | 'flatPerError'
 
+// Describes the student submission nav row data expected by this file.
 type StudentSubmissionNavRow = {
     userId: number
     firstName: string
@@ -43,7 +49,9 @@ type StudentSubmissionNavRow = {
     submissionId: number
 }
 
+// Displays a submission and manages grading deductions, code selections, and saved feedback.
 export function AdminGrading() {
+    // Reads the school, class, or assignment identifiers from the current route.
     const { id, school_id, class_id, module_id, project_id, checkpoint_id: route_checkpoint_id } = useParams<{
         id: string
         school_id: string
@@ -54,9 +62,7 @@ export function AdminGrading() {
     }>()
 
     const submissionId = id !== undefined ? parseInt(id, 10) : defaultpagenumber
-    const sid = school_id !== undefined ? parseInt(school_id, 10) : -1
     const cid = class_id !== undefined ? parseInt(class_id, 10) : -1
-    const mid = module_id !== undefined ? parseInt(module_id, 10) : -1
     const pid = project_id !== undefined ? parseInt(project_id, 10) : -1
     const navigate = useNavigate()
     const location = useLocation()
@@ -68,19 +74,12 @@ export function AdminGrading() {
 
     const params = new URLSearchParams(location.search)
     const fromParam = (params.get('from') || '').toLowerCase()
-    const fromAnalytics = fromParam === 'analytics' || fromParam === 'analytics-dashboard'
-    const truthyValues = ['1', 'true', 'yes', 'y', 'on']
-    const checkpointParam = (params.get('checkpoint') || params.get('practice') || '').toLowerCase()
-    const isCheckpoint = !!route_checkpoint_id || truthyValues.includes(checkpointParam)
-    const checkpointIdParam = (
-        route_checkpoint_id ||
-        params.get('checkpoint_id') ||
-        params.get('practice_problem_id') ||
-        ''
-    ).trim()
-    const parsedCheckpointId = parseInt(checkpointIdParam, 10)
-    const checkpointId =
-        isCheckpoint && !Number.isNaN(parsedCheckpointId) && parsedCheckpointId > 0 ? parsedCheckpointId : undefined
+    const fromAnalytics = fromParam === 'analytics'
+    const parsedCheckpointId = Number(route_checkpoint_id)
+    const checkpointId = Number.isInteger(parsedCheckpointId) && parsedCheckpointId > 0
+        ? parsedCheckpointId
+        : undefined
+    const isCheckpoint = checkpointId !== undefined
 
     const classSelectionUrl = `/admin/school/${schoolIdStr}/classes`
     const adminMenuUrl = `/admin/school/${schoolIdStr}/class/${classIdStr}/menu`
@@ -91,6 +90,7 @@ export function AdminGrading() {
         ? `/admin/school/${schoolIdStr}/class/${classIdStr}/module/${moduleIdStr}/project/${projectIdStr}/checkpoint/${checkpointId}/submissions`
         : `/admin/school/${schoolIdStr}/class/${classIdStr}/module/${moduleIdStr}/project/${projectIdStr}/submissions`
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [studentName, setStudentName] = useState<string>('')
     const [studentRoster, setStudentRoster] = useState<StudentSubmissionNavRow[]>([])
     const [studentHeaderLoading, setStudentHeaderLoading] = useState<boolean>(true)
@@ -99,6 +99,10 @@ export function AdminGrading() {
     const [savedGrade, setSavedGrade] = useState<number | null>(null)
     const [activeTestcaseName, setActiveTestcaseName] = useState<string>('')
     const [activeTestcaseLongDiff, setActiveTestcaseLongDiff] = useState<string>('')
+
+    const activeSubmissionRef = useRef(submissionId)
+    activeSubmissionRef.current = submissionId
+    useEffect(() => () => { aiAbortRef.current?.abort() }, [submissionId])
 
     // Track which lines contain errors and if errors exist
     const [observedErrors, setObservedErrors] = useState<ObservedError[]>([])
@@ -113,12 +117,13 @@ export function AdminGrading() {
     const [errorDefsLoading, setErrorDefsLoading] = useState<boolean>(true)
     const [errorDefsError, setErrorDefsError] = useState<string | null>(null)
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         setErrorDefsLoading(true)
         setErrorDefsError(null)
 
         axios
-            .get(`${import.meta.env.VITE_API_URL}/ai/grading-error-defs`, {
+            .get(`${import.meta.env.VITE_API_URL}/ai_suggestions/grading_error_defs`, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
             .then((response) => {
@@ -149,8 +154,10 @@ export function AdminGrading() {
     const [newCustomPoints, setNewCustomPoints] = useState<number>(10)
     const [customAddError, setCustomAddError] = useState<string | null>(null)
 
+    // Helper for make custom error id used by this component.
     const makeCustomErrorId = () => `CUST_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.toUpperCase()
 
+    // Adds custom error def for this view.
     const addCustomErrorDef = () => {
         const label = newCustomLabel.trim()
         if (!label) {
@@ -168,23 +175,27 @@ export function AdminGrading() {
         setSaveStatus('idle')
     }
 
+    // Recomputes all error defs only when its dependencies change.
     const ALL_ERROR_DEFS = useMemo<ErrorOption[]>(() => [...baseErrorDefs, ...customErrorDefs], [baseErrorDefs, customErrorDefs])
 
     // Store ONLY overrides (modified points). Defaults come from ALL_ERROR_DEFS.
     const [errorPoints, setErrorPoints] = useState<Record<string, number>>({})
 
+    // Recomputes default points map only when its dependencies change.
     const DEFAULT_POINTS_MAP = useMemo<Record<string, number>>(() => {
         const m: Record<string, number> = {}
         for (const e of ALL_ERROR_DEFS) m[e.id] = Number.isFinite(e.points) ? Math.max(0, e.points) : 0
         return m
     }, [ALL_ERROR_DEFS])
 
+    // Returns the point value currently applied to a grading error.
     const getEffectivePoints = (errorId: string) => {
         const o = errorPoints[errorId]
         if (Number.isFinite(o)) return Math.max(0, o)
         return Number.isFinite(DEFAULT_POINTS_MAP[errorId]) ? Math.max(0, DEFAULT_POINTS_MAP[errorId]) : 0
     }
 
+    // Recomputes error defs only when its dependencies change.
     const ERROR_DEFS = useMemo<ErrorOption[]>(
         () =>
             ALL_ERROR_DEFS.map((e) => ({
@@ -194,12 +205,14 @@ export function AdminGrading() {
         [ALL_ERROR_DEFS, errorPoints, DEFAULT_POINTS_MAP],
     )
 
+    // Recomputes error map only when its dependencies change.
     const ERROR_MAP = useMemo<Record<string, ErrorOption>>(() => {
         const map: Record<string, ErrorOption> = {}
         for (const err of ERROR_DEFS) map[err.id] = err
         return map
     }, [ERROR_DEFS])
 
+    // Helper for bump error points used by this component.
     const bumpErrorPoints = (errorId: string, delta: number) => {
         if (!delta) return
         setErrorPoints((prev) => {
@@ -221,17 +234,23 @@ export function AdminGrading() {
     const [aiSuggestionIds, setAiSuggestionIds] = useState<string[]>([])
     const [aiSuggestStatus, setAiSuggestStatus] = useState<'idle' | 'loading' | 'error'>('idle')
     const [aiSuggestError, setAiSuggestError] = useState<string | null>(null)
+    // Keeps last ai key ref available across renders without triggering a state update.
     const lastAiKeyRef = useRef<string>('')
+    // Keeps ai abort ref available across renders without triggering a state update.
     const aiAbortRef = useRef<AbortController | null>(null)
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [aiEverRequested, setAiEverRequested] = useState<boolean>(false)
     const [aiHidden, setAiHidden] = useState<boolean>(false)
 
     // References for code lines
     const codeContainerRef = useRef<HTMLDivElement | null>(null)
+    // Keeps line refs available across renders without triggering a state update.
     const lineRefs = useRef<Record<number, HTMLLIElement | null>>({})
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [suppressNativeSelection, setSuppressNativeSelection] = useState<boolean>(false)
 
+    // Clears the browser text selection after a code-selection interaction.
     const clearBrowserSelection = () => {
         const sel = window.getSelection()
         if (sel && sel.rangeCount > 0) {
@@ -239,6 +258,7 @@ export function AdminGrading() {
         }
     }
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         const el = codeContainerRef.current
         if (!el) return
@@ -250,6 +270,7 @@ export function AdminGrading() {
         }
     }, [suppressNativeSelection])
 
+    // Recomputes error count by key only when its dependencies change.
     const errorCountByKey = useMemo(() => {
         const m: Record<string, number> = {}
         for (const e of observedErrors) {
@@ -258,6 +279,7 @@ export function AdminGrading() {
         return m
     }, [observedErrors])
 
+    // Returns error count for this view.
     const getErrorCount = (start: number, end: number, errorId: string) => {
         return errorCountByKey[`${start}-${end}-${errorId}`] ?? 0
     }
@@ -288,6 +310,7 @@ export function AdminGrading() {
         setSaveStatus('idle')
     }
 
+    // Updates error note for this view.
     const setErrorNote = (start: number, end: number, errorId: string, note: string) => {
         setObservedErrors((prev) =>
             prev.map((e) => (e.startLine === start && e.endLine === end && e.errorId === errorId ? { ...e, note } : e)),
@@ -295,12 +318,14 @@ export function AdminGrading() {
         setSaveStatus('idle')
     }
 
+    // Helper for scroll to line used by this component.
     const scrollToLine = (lineNo: number) => {
         const el = lineRefs.current[lineNo]
         if (!el) return
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
 
+    // Reads the selected code text from the browser selection.
     const getSelectedCodeFromDom = (range: LineRange): string => {
         const lines: string[] = []
         for (let ln = range.start; ln <= range.end; ln++) {
@@ -313,6 +338,7 @@ export function AdminGrading() {
         return lines.join('\n').trim()
     }
 
+    // Requests suggested grading feedback for the selected submission.
     const requestAiSuggestions = async (range: LineRange) => {
         const selectedCode = getSelectedCodeFromDom(range)
         if (!selectedCode) {
@@ -335,8 +361,9 @@ export function AdminGrading() {
         setAiSuggestError(null)
 
         try {
+            // Sends this operation and its payload to the server.
             const res = await axios.post(
-                `${import.meta.env.VITE_API_URL}/ai/grading-suggestions`,
+                `${import.meta.env.VITE_API_URL}/ai_suggestions/grading_suggestions`,
                 {
                     submissionId: submissionId,
                     startLine: range.start,
@@ -353,31 +380,35 @@ export function AdminGrading() {
                 },
             )
 
+            if (ctrl.signal.aborted || activeSubmissionRef.current !== submissionId) return
             const ids = Array.isArray(res.data?.suggestions)
                 ? res.data.suggestions.map((id: any) => String(id)).filter((id: string) => ERROR_MAP[id])
                 : []
             setAiSuggestionIds(ids)
             setAiSuggestStatus('idle')
         } catch (e: any) {
-            if (e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED') return
+            if (ctrl.signal.aborted || activeSubmissionRef.current !== submissionId || e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED') return
             setAiSuggestStatus('error')
             setAiSuggestError('AI suggestion request failed.')
             setAiSuggestionIds([])
         }
     }
 
+    // Calculates the point deduction from the selected grading errors.
     const computeDeduction = (errorId: string, count: number) => {
         const pts = ERROR_MAP[errorId]?.points ?? 0
         if (scoringMode === 'flatPerError') return pts
         return pts * Math.max(1, count)
     }
 
+    // Helper for auto resize textarea used by this component.
     const autoResizeTextarea = (el: HTMLTextAreaElement | null) => {
         if (!el) return
         el.style.height = 'auto'
         el.style.height = `${el.scrollHeight}px`
     }
 
+    // Recomputes total points only when its dependencies change.
     const totalPoints = useMemo(() => {
         if (scoringMode === 'flatPerError') {
             const uniq = new Set<string>()
@@ -392,8 +423,10 @@ export function AdminGrading() {
     }, [observedErrors, ERROR_MAP, scoringMode])
 
     const grade = Math.max(0, 100 - totalPoints)
+    // Recomputes graded student roster only when its dependencies change.
     const gradedStudentRoster = useMemo(() => studentRoster.filter((row) => row.submissionId > 0), [studentRoster])
 
+    // Recomputes current student index only when its dependencies change.
     const currentStudentIndex = useMemo(
         () => gradedStudentRoster.findIndex((row) => row.submissionId === submissionId),
         [gradedStudentRoster, submissionId],
@@ -410,6 +443,7 @@ export function AdminGrading() {
             ? gradedStudentRoster[currentStudentIndex + 1]
             : null
 
+    // Helper for go to submission used by this component.
     const goToSubmission = (nextSubmissionId: number) => {
         const parts = location.pathname.split('/')
         let targetIndex = parts.length - 1
@@ -429,26 +463,32 @@ export function AdminGrading() {
     const [hoveredLine, setHoveredLine] = useState<number | null>(null)
     const [initialLine, setInitialLine] = useState<number | null>(null)
     const [selectedRange, setSelectedRange] = useState<LineRange | null>(null)
+    // Keeps selected range ref available across renders without triggering a state update.
     const selectedRangeRef = useRef<LineRange | null>(null)
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         selectedRangeRef.current = selectedRange
     }, [selectedRange])
 
+    // Helper for select lines used by this component.
     const selectLines = (start: number, end: number) => {
         setSelectedRange({ start: start, end: end })
     }
 
+    // Checks range selected for this view.
     const isRangeSelected = (start: number, end: number) => {
         if (selectedRange === null) return false
         return start <= selectedRange.end && end >= selectedRange.start
     }
 
+    // Handles mouse down for this view.
     const handleMouseDown = (line: number) => {
         setSuppressNativeSelection(false)
         setInitialLine(line)
         selectLines(line, line)
     }
 
+    // Handles mouse enter for this view.
     const handleMouseEnter = (line: number) => {
         setHoveredLine(line)
         if (initialLine === null) return
@@ -468,6 +508,7 @@ export function AdminGrading() {
         }
     }
 
+    // Handles mouse up for this view.
     const handleMouseUp = () => {
         const range = selectedRangeRef.current
         const isMultiLine = range !== null && range.start !== range.end
@@ -480,6 +521,7 @@ export function AdminGrading() {
         setInitialLine(null)
     }
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (initialLine !== null) return
         if (selectedRange === null) {
@@ -499,9 +541,11 @@ export function AdminGrading() {
     const [findMatches, setFindMatches] = useState<number[]>([])
     const [findMatchIndex, setFindMatchIndex] = useState<number>(0)
 
+    // Recomputes find match set only when its dependencies change.
     const findMatchSet = useMemo(() => new Set(findMatches), [findMatches])
     const activeFindLine = findMatches.length > 0 ? findMatches[findMatchIndex] : null
 
+    // Searches the displayed code and updates the current match.
     const performFind = (rawQuery: string) => {
         const needle = rawQuery.trim()
         if (!needle) {
@@ -531,6 +575,7 @@ export function AdminGrading() {
         if (matches.length > 0) scrollToLine(matches[0])
     }
 
+    // Helper for step find used by this component.
     const stepFind = (dir: 1 | -1) => {
         if (findMatches.length === 0) return
         setFindMatchIndex((prev) => {
@@ -542,8 +587,10 @@ export function AdminGrading() {
 
     // References for Navigation
     const diffViewRef = useRef<HTMLElement | null>(null)
+    // Keeps all observed errors ref available across renders without triggering a state update.
     const allObservedErrorsRef = useRef<HTMLElement | null>(null)
 
+    // Helper for scroll to section used by this component.
     const scrollToSection = (section: HTMLElement) => {
         if (!section) return
         section.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -556,6 +603,9 @@ export function AdminGrading() {
             return
         }
 
+        const controller = new AbortController()
+        setStudentRoster([])
+        setStudentName('')
         setStudentHeaderLoading(true)
 
         axios
@@ -563,12 +613,14 @@ export function AdminGrading() {
                 `${import.meta.env.VITE_API_URL}/submissions/recentsubproject`,
                 { project_id: pid, checkpoint: isCheckpoint, checkpoint_id: checkpointId ?? null },
                 {
+                    signal: controller.signal,
                     headers: {
                         Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}`,
                     },
                 },
             )
             .then((res) => {
+                if (controller.signal.aborted) return
                 const data = res.data ?? {}
                 const rows: StudentSubmissionNavRow[] = Object.entries(data)
                     .map(([userId, value]) => {
@@ -600,8 +652,9 @@ export function AdminGrading() {
                 const currentRow = rows.find((row) => row.submissionId === submissionId)
                 setStudentName(currentRow?.fullName ?? '')
             })
-            .catch((err) => console.log(err))
-            .finally(() => setStudentHeaderLoading(false))
+            .catch((err) => { if (!controller.signal.aborted) console.log(err) })
+            .finally(() => { if (!controller.signal.aborted) setStudentHeaderLoading(false) })
+        return () => controller.abort()
     }, [submissionId, pid, isCheckpoint, checkpointId])
 
     // Fetch saved grading errors
@@ -611,13 +664,28 @@ export function AdminGrading() {
             return
         }
 
+        const controller = new AbortController()
+        savedSignatureRef.current = computeSignatureFromParts([], 'perInstance', {}, [])
+        setObservedErrors([])
+        setErrorPoints({})
+        setCustomErrorDefs([])
+        setScoringMode('perInstance')
+        setSavedGrade(null)
+        setSelectedRange(null)
+        setActiveTestcaseName('')
+        setActiveTestcaseLongDiff('')
+        setIsDirty(false)
+        setSaveStatus('idle')
+        setShowSavedBanner(false)
         setSavedGradingLoading(true)
 
         axios
-            .get(`${import.meta.env.VITE_API_URL}/submissions/get-grading/${submissionId}`, {
+            .get(`${import.meta.env.VITE_API_URL}/submissions/get_grading/${submissionId}`, {
+                signal: controller.signal,
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
             .then((response) => {
+                if (controller.signal.aborted) return
                 const { errors, scoringMode: savedMode, errorPoints: savedPoints, errorDefs: savedDefs } = response.data
                 const savedDbGrade = response.data?.grade
 
@@ -671,8 +739,9 @@ export function AdminGrading() {
                 setSaveStatus('idle')
 
             })
-            .catch((err) => console.error('Could not load saved grading:', err))
-            .finally(() => setSavedGradingLoading(false))
+            .catch((err) => { if (!controller.signal.aborted) console.error('Could not load saved grading:', err) })
+            .finally(() => { if (!controller.signal.aborted) setSavedGradingLoading(false) })
+        return () => controller.abort()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [submissionId])
 
@@ -683,8 +752,10 @@ export function AdminGrading() {
 
     // Unsaved changes tracking (dirty state)
     const [isDirty, setIsDirty] = useState<boolean>(false)
+    // Keeps saved signature ref available across renders without triggering a state update.
     const savedSignatureRef = useRef<string>('') // last loaded/saved snapshot
 
+    // Computes signature from parts for this view.
     const computeSignatureFromParts = (
         errs: ObservedError[],
         mode: ScoringMode,
@@ -724,22 +795,26 @@ export function AdminGrading() {
         })
     }
 
+    // Recomputes current signature only when its dependencies change.
     const currentSignature = useMemo(
         () => computeSignatureFromParts(observedErrors, scoringMode, errorPoints, customErrorDefs),
         [observedErrors, scoringMode, errorPoints, customErrorDefs],
     )
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         const dirty = savedSignatureRef.current !== '' && currentSignature !== savedSignatureRef.current
         setIsDirty(dirty)
     }, [currentSignature])
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (!isDirty) return
         setShowSavedBanner(false)
         setSaveStatus((prev) => (prev === 'saved' ? 'idle' : prev))
     }, [isDirty])
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (!showSavedBanner) return
 
@@ -751,6 +826,7 @@ export function AdminGrading() {
         return () => window.clearTimeout(timer)
     }, [showSavedBanner])
 
+    // Helper for dismiss saved banner used by this component.
     const dismissSavedBanner = () => {
         setShowSavedBanner(false)
         setSaveStatus((prev) => (prev === 'saved' ? 'idle' : prev))
@@ -758,6 +834,7 @@ export function AdminGrading() {
 
     // Warn before leaving the page if there are unsaved changes (tab close/refresh/navigate away)
     useEffect(() => {
+        // Helper for on before unload used by this component.
         const onBeforeUnload = (e: BeforeUnloadEvent) => {
             if (!isDirty) return
             e.preventDefault()
@@ -767,6 +844,7 @@ export function AdminGrading() {
         return () => window.removeEventListener('beforeunload', onBeforeUnload)
     }, [isDirty])
 
+    // Converts the selected grading errors into the payload sent when saving.
     const serializeErrorsForSave = (errs: ObservedError[]) => {
         // New backend supports counts directly.
         return errs.map((e) => ({
@@ -778,6 +856,7 @@ export function AdminGrading() {
         }))
     }
 
+    // Handles save for this view.
     const handleSave = () => {
         setSaveStatus('saving')
         setShowSavedBanner(false)
@@ -789,7 +868,7 @@ export function AdminGrading() {
 
         axios
             .post(
-                `${import.meta.env.VITE_API_URL}/submissions/save-grading`,
+                `${import.meta.env.VITE_API_URL}/submissions/save_grading`,
                 {
                     submissionId: submissionId,
                     grade: grade,
@@ -808,6 +887,7 @@ export function AdminGrading() {
                 },
             )
             .then(() => {
+                if (activeSubmissionRef.current !== submissionId) return
                 setSaveStatus('saved')
                 setSavedGrade(grade)
                 savedSignatureRef.current = currentSignature
@@ -815,6 +895,7 @@ export function AdminGrading() {
                 setShowSavedBanner(true)
             })
             .catch((error) => {
+                if (activeSubmissionRef.current !== submissionId) return
                 console.error('Failed to save:', error)
                 setSaveStatus('error')
             })
@@ -840,6 +921,7 @@ export function AdminGrading() {
 
     const selectedRangeErrors = selectedRange !== null ? observedErrors.filter((err) => isRangeSelected(err.startLine, err.endLine)) : []
 
+    // Recomputes selected range counts by error id only when its dependencies change.
     const selectedRangeCountsByErrorId = useMemo(() => {
         const m: Record<string, number> = {}
         if (!selectedRange) return m
@@ -851,14 +933,19 @@ export function AdminGrading() {
         return m
     }, [observedErrors, selectedRange])
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div className="page-container" id="admin-output-diff">
+            {/* Shows progress while this view is waiting for data. */}
             <LoadingAnimation show={showLoadingOverlay} message={isInitialPageLoading ? 'Loading grading page...' : 'Saving grade...'} />
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>MAAT</title>
             </Helmet>
-            <MenuComponent showUpload={false} showAdminUpload={false} showHelp={false} showCreate={false} showLast={false} showReviewButton={false} />
+            {/* Displays the navigation and actions available on this page. */}
+            <MenuComponent />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={[
                     { label: 'School Selection', to: '/schools' },
@@ -1070,6 +1157,7 @@ export function AdminGrading() {
                                                 : errors.reduce((sum, e) => sum + computeDeduction(e.errorId, e.count ?? 1), 0)
                                         const totalCountForRange = errors.reduce((sum, e) => sum + (e.count ?? 1), 0)
 
+                                        // Renders the interface using the current data and interaction state.
                                         return (
                                             <div
                                                 key={`${start}-${end}`}
@@ -1120,6 +1208,7 @@ export function AdminGrading() {
                                                         const count = Math.max(1, err.count ?? 1)
                                                         const shownDeduction = computeDeduction(err.errorId, count)
 
+                                                        // Renders the interface using the current data and interaction state.
                                                         return (
                                                             <div key={`${start}-${end}-${err.errorId}-${idx}`} className="all-errors-item" title={desc}>
                                                                 <div className="col label">
@@ -1326,6 +1415,7 @@ export function AdminGrading() {
                                                     const count = selectedRange === null ? 0 : selectedRangeCountsByErrorId[errorId] ?? 0
                                                     const shownDeduction = selectedRange === null ? 0 : computeDeduction(errorId, Math.max(1, count))
 
+                                                    // Renders the interface using the current data and interaction state.
                                                     return (
                                                         <div key={`ai-${errorId}`} className="suggestion-card" title={desc}>
                                                             <div className="suggestion-top">
@@ -1413,6 +1503,7 @@ export function AdminGrading() {
                                             const count = selectedRange ? selectedRangeCountsByErrorId[err.id] ?? 0 : 0
                                             const shownDeduction = selectedRange === null ? err.points : computeDeduction(err.id, Math.max(1, count))
 
+                                            // Renders the interface using the current data and interaction state.
                                             return (
                                                 <div key={err.id} className="suggestion-card" title={err.description}>
                                                     <div className="suggestion-top">
@@ -1531,6 +1622,7 @@ export function AdminGrading() {
                                         const ptsNow = meta?.points ?? 0
                                         const rangeLabel = err.startLine === err.endLine ? `Line ${err.startLine}` : `Lines ${err.startLine}-${err.endLine}`
 
+                                        // Renders the interface using the current data and interaction state.
                                         return (
                                             <div key={`${err.startLine}-${err.endLine}-${err.errorId}-${idx}`} className="suggestion-card" title={desc}>
                                                 <div className="suggestion-top">

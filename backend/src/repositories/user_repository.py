@@ -1,56 +1,64 @@
+"""Read account records and maintain login and enrollment-related user data.
+
+Find or create users, resolve class roles and section membership, and record
+failed login attempts and account locks. Provide the user details needed by
+authentication, class administration, and grading interfaces."""
+
 import datetime
 import re
-from operator import and_
-from typing import Dict, List
-
-from src.constants import STUDENT_ROLE
-from src.repositories.database import db
-from .models import ClassAssignments, LectureSections, Users, LoginAttempts, Labs
+from typing import Dict
+from typing import List
+from src.core.constants import STUDENT_ROLE
+from src.core.constants import chicago_now
+from src.core.constants import to_chicago_datetime
+from src.core.database import db
+from sqlalchemy import func
+from src.core.models import ClassAssignments
+from src.core.models import LectureSections
+from src.core.models import Users
+from src.core.models import LoginAttempts
+from src.core.models import Labs
 from flask_jwt_extended import current_user
 
 
 class UserRepository:
+    """Represent user repository within the users component."""
 
     def get_user_status(self) -> str:
+        """Return user status."""
         return str(self.get_highest_class_role(getattr(current_user, "Id", None)))
 
     def get_highest_class_role(self, user_id: int) -> int:
+        """Return the user's highest class-assignment role."""
+        # Handle the case where user_id is None.
         if user_id is None:
             return STUDENT_ROLE
 
-        roles = ClassAssignments.query.with_entities(ClassAssignments.Role).filter(
-            ClassAssignments.UserId == user_id
-        ).all()
-
-        parsed_roles = []
-        for role_row in roles:
-            if hasattr(role_row, "Role"):
-                role_value = role_row.Role
-            elif isinstance(role_row, (tuple, list)):
-                role_value = role_row[0]
-            else:
-                role_value = role_row
-
-            try:
-                parsed_roles.append(int(role_value))
-            except (TypeError, ValueError):
-                parsed_roles.append(STUDENT_ROLE)
-
-        return max([STUDENT_ROLE] + parsed_roles)
+        role = (
+            db.session.query(func.max(ClassAssignments.Role))
+            .filter(ClassAssignments.UserId == int(user_id))
+            .scalar()
+        )
+        try:
+            return int(role) if role is not None else STUDENT_ROLE
+        # Convert this failure into the fallback result or error response below.
+        except (TypeError, ValueError):
+            return STUDENT_ROLE
 
     def getUserByName(self, username: str) -> Users:
         """
         Returns a user object from the database based on the given username.
-        
+
         Args:
         - username (str): the username of the user to retrieve
-        
+
         Returns:
         - Users: the user object corresponding to the given username, or None if no such user exists
         """
-        user = Users.query.filter(Users.Username==username).one_or_none()
+        # Execute the database lookup with the filters specified below.
+        user = Users.query.filter(Users.Username == username).one_or_none()
         return user
-    
+
     def get_user(self, user_id: int) -> Users:
         """
         Retrieves a user from the database by their ID.
@@ -61,23 +69,22 @@ class UserRepository:
         Returns:
             Users: The user object if found, otherwise None.
         """
+        # Execute the database lookup with the filters specified below.
         user = Users.query.filter(Users.Id == user_id).one_or_none()
         return user
 
     def doesUserExist(self, username: str) -> bool:
-        """Checks if a user with the given username exists in the database.
+        """Return whether a user exists for the supplied username."""
+        return (
+            db.session.query(Users.Id)
+            .filter(Users.Username == username)
+            .first()
+            is not None
+        )
 
-        Args:
-            username (str): The username to check.
-
-        Returns:
-            bool: True if a user with the given username exists, False otherwise.
-        """
-        user = Users.query.filter(Users.Username==username).first()
-        
-        return user is not None
-
-    def create_user(self, username: str, first_name: str, last_name: str, email: str, student_number: str):
+    def create_user(
+        self, username: str, first_name: str, last_name: str, email: str, student_number: str
+    ):
         """Creates a new user with the given information and adds it to the database.
 
         Args:
@@ -90,60 +97,66 @@ class UserRepository:
         Returns:
             None
         """
-        user = Users(Username=username,Firstname=first_name,Lastname=last_name,Email=email,StudentNumber=student_number,IsLocked=False)
+        user = Users(
+            Username=username,
+            Firstname=first_name,
+            Lastname=last_name,
+            Email=email,
+            StudentNumber=student_number,
+            IsLocked=False,
+        )
+        # Stage the new records in the current database transaction.
         db.session.add(user)
+        # Commit the pending database changes so they persist beyond this request.
         db.session.commit()
+
     def get_all_users(self) -> List[Users]:
         """Retrieves all users from the database.
 
         Returns:
             List[Users]: A list of all user objects in the database.
         """
+        # Execute the database lookup with the filters specified below.
         user = Users.query.all()
         return user
+
     def get_all_users_by_cid(self, class_id) -> List[Users]:
-        """Returns a list of all users associated with a given class ID.
+        """Return student users assigned to the given class."""
+        return (
+            Users.query.join(ClassAssignments, ClassAssignments.UserId == Users.Id)
+            .filter(
+                ClassAssignments.ClassId == int(class_id),
+                ClassAssignments.Role == STUDENT_ROLE,
+            )
+            .order_by(Users.Lastname.asc(), Users.Firstname.asc(), Users.Id.asc())
+            .all()
+        )
 
-        Args:
-            class_id (int): The ID of the class to retrieve users for.
-
-        Returns:
-            List[Users]: A list of all users associated with the given class ID.
-        """
-        users_in_class = db.session.query(ClassAssignments).join(Users, ClassAssignments.UserId == Users.Id).filter(
-            and_(ClassAssignments.ClassId == class_id, ClassAssignments.Role == STUDENT_ROLE)
-        ).all()
-        users = []
-        for user in users_in_class:
-            users.append(Users.query.filter(Users.Id==user.UserId).one_or_none())
-        return users
     def send_attempt_data(self, username: str, ipadr: str, time: datetime):
-        """Adds a new login attempt to the database. This is only triggered should a user fail to sign in, used to prevent brute force attacks
-
-        Args:
-            username (str): The username used in the login attempt.
-            ipadr (str): The IP address of the device used in the login attempt.
-            time (datetime): The date and time of the login attempt.
-
-        Returns:
-            None
-        """
+        """Record a failed login attempt using America/Chicago wall time."""
         attempt_time = time
-        if not isinstance(attempt_time, (datetime.datetime, datetime.date)):
+        if isinstance(attempt_time, datetime.datetime):
+            attempt_time = to_chicago_datetime(attempt_time)
+        elif isinstance(attempt_time, datetime.date):
+            attempt_time = datetime.datetime.combine(attempt_time, datetime.time.min)
+        else:
             try:
                 attempt_time = datetime.datetime.strptime(
                     str(attempt_time),
                     "%Y/%m/%d %H:%M:%S",
                 )
             except (TypeError, ValueError):
-                attempt_time = datetime.datetime.now()
+                attempt_time = chicago_now()
 
-        login_attempt = LoginAttempts(
-            IPAddress=str(ipadr or ""),
-            Username=str(username or ""),
-            AttemptedAt=attempt_time,
+        # Stage the new records in the current database transaction.
+        db.session.add(
+            LoginAttempts(
+                IPAddress=str(ipadr or ""),
+                Username=str(username or ""),
+                AttemptedAt=attempt_time,
+            )
         )
-        db.session.add(login_attempt)
+        # Commit the pending database changes so they persist beyond this request.
         db.session.commit()
 
     def can_user_login(self, username: str) -> int:
@@ -155,25 +168,21 @@ class UserRepository:
         Returns:
             int: The number of login attempts made by the user.
         """
+        # Execute the database lookup with the filters specified below.
         number = LoginAttempts.query.filter(LoginAttempts.Username == username).count()
         return number
-        
+
     def clear_failed_attempts(self, username: str):
-        """Deletes all login attempts for a given username from the database. This should trigger when a student logs in successfully.
-
-        Args:
-            username (str): The username for which to delete login attempts.
-
-        Returns:
-            None
-        """
-        attempts = LoginAttempts.query.filter(LoginAttempts.Username == username).all()
-        for attempt in attempts:
-            db.session.delete(attempt)
+        """Delete all recorded login attempts for a username."""
+        # Execute the database lookup with the filters specified below.
+        LoginAttempts.query.filter(LoginAttempts.Username == username).delete(
+            synchronize_session=False
+        )
+        # Commit the pending database changes so they persist beyond this request.
         db.session.commit()
 
     def lock_user_account(self, username: str):
-        """Locks the user account associated with the given username. This triggers if the same username fails to login 5 times in a row. 
+        """Locks the user account associated with the given username. This triggers if the same username fails to login 5 times in a row.
 
         Args:
             username (str): The username of the user account to be locked.
@@ -181,77 +190,61 @@ class UserRepository:
         Returns:
             None
         """
-        query = Users.query.filter(Users.Username==username).one()
-        query.IsLocked=True
+        # Execute the database lookup with the filters specified below.
+        query = Users.query.filter(Users.Username == username).one()
+        query.IsLocked = True
+        # Commit the pending database changes so they persist beyond this request.
         db.session.commit()
-    
-    def get_user_lectures(self, userIds: List[int], class_id) -> Dict[int, str]:
-        """Returns a dictionary of lecture names for each user in the given list of user IDs.
-        
-        Args:
-            userIds (List[int]): A list of user IDs for which to retrieve lecture names.
-            
-        Returns:
-            Dict[int, str]: A dictionary where the keys are user IDs and the values are the names of the lectures
-            assigned to each user.
-        """
-        #TODO: Do we still use this? seems to only work for single class submissions.
-        class_assignments = ClassAssignments.query.filter(and_(ClassAssignments.UserId.in_(userIds), ClassAssignments.ClassId == class_id)).all()
-        
-        user_lectures_dict = {user_id: "" for user_id in userIds}
-        for class_assignment in class_assignments:
-            lecture = LectureSections.query.filter(
-                LectureSections.Id == class_assignment.LectureId
-            ).one_or_none()
-            if lecture is not None:
-                user_lectures_dict[class_assignment.UserId] = lecture.Name
 
-        return user_lectures_dict
+    def get_user_lectures(self, userIds: List[int], class_id) -> Dict[int, str]:
+        """Return lecture-section names for the requested users in one class."""
+        result = {int(user_id): "" for user_id in userIds}
+        # Handle the case where not userIds.
+        if not userIds:
+            return result
+
+        # Execute the database lookup with the filters specified below.
+        rows = (
+            db.session.query(ClassAssignments.UserId, LectureSections.Name)
+            .outerjoin(LectureSections, LectureSections.Id == ClassAssignments.LectureId)
+            .filter(
+                ClassAssignments.UserId.in_(userIds),
+                ClassAssignments.ClassId == int(class_id),
+            )
+            .all()
+        )
+        # Process each (user_id, lecture_name) from rows.
+        for user_id, lecture_name in rows:
+            if lecture_name is not None:
+                result[int(user_id)] = str(lecture_name)
+        return result
 
     def get_user_labs(self, userIds: List[int], class_id) -> Dict[int, int]:
-        """
-        Returns a dictionary mapping each userId to their Lab number for the given class.
-        If a user has no lab assigned, the value is -1.
+        """Return lab numbers for the requested users without per-user queries."""
+        result: Dict[int, int] = {int(user_id): -1 for user_id in userIds}
+        # Handle the case where not userIds.
+        if not userIds:
+            return result
 
-        Args:
-            userIds (List[int]): Users to look up.
-            class_id (int): Class context for the assignments.
+        # Execute the database lookup with the filters specified below.
+        rows = (
+            db.session.query(ClassAssignments.UserId, Labs.Name)
+            .outerjoin(Labs, Labs.Id == ClassAssignments.LabId)
+            .filter(
+                ClassAssignments.UserId.in_(userIds),
+                ClassAssignments.ClassId == int(class_id),
+            )
+            .all()
+        )
+        # Process each (user_id, lab_name) from rows.
+        for user_id, lab_name in rows:
+            if not lab_name:
+                continue
+            match = re.search(r"\d+", str(lab_name))
+            if match:
+                result[int(user_id)] = int(match.group(0))
+        return result
 
-        Returns:
-            Dict[int, int]: { user_id: lab_number }
-        """
-        # Start with all users defaulting to -1 to avoid KeyErrors in callers.
-        user_labs_dict: Dict[int, int] = {uid: -1 for uid in userIds}
-
-        # Fetch class assignments for these users within this class.
-        class_assignments = ClassAssignments.query.filter(
-            and_(ClassAssignments.UserId.in_(userIds), ClassAssignments.ClassId == class_id)
-        ).all()
-
-        for ca in class_assignments:
-            lab_number = -1
-
-            # Expecting ClassAssignments to have a LabId foreign key to Labs.Id.
-            lab_id = getattr(ca, "LabId", None)
-            if lab_id is not None:
-                lab = Labs.query.filter(Labs.Id == lab_id).one_or_none()
-                if lab is not None:
-                    # Prefer an explicit numeric column if it exists (e.g., Labs.Number).
-                    if hasattr(lab, "Number") and lab.Number is not None:
-                        try:
-                            lab_number = int(lab.Number)
-                        except (TypeError, ValueError):
-                            lab_number = -1
-                    # Fallback: try to parse a number from a name like "Lab 3"
-                    elif hasattr(lab, "Name") and lab.Name:
-                        m = re.search(r"\d+", str(lab.Name))
-                        if m:
-                            lab_number = int(m.group(0))
-
-            user_labs_dict[ca.UserId] = lab_number
-
-        return user_labs_dict
-        
     def get_user_email(self, userId) -> str:
         """
         Retrieves the email of a user with the given userId.
@@ -262,7 +255,8 @@ class UserRepository:
         Returns:
             str: The email of the user with the given userId.
         """
-        query = Users.query.filter(Users.Id==userId).one()
+        # Execute the database lookup with the filters specified below.
+        query = Users.query.filter(Users.Id == userId).one()
         email = query.Email
         return email
 
@@ -276,23 +270,19 @@ class UserRepository:
         Returns:
         - StudentNumber: str, the student number of the user with the given user_id.
         """
-        query = Users.query.filter(Users.Id==user_id).one()
+        # Execute the database lookup with the filters specified below.
+        query = Users.query.filter(Users.Id == user_id).one()
         StudentNumber = query.StudentNumber
         return StudentNumber
+
     def unlock_student_account(self, user_id):
-        """
-        Unlocks the account of a student with the given user_id. A user's account can be locked if they fail to login 5 times in a row.
-
-        Args:
-        - user_id: int, the id of the user whose account is to be unlocked.
-
-        Returns:
-        - None
-        """
-        query = Users.query.filter(Users.Id==user_id).one()
-        query.IsLocked = 0
-        db.session.commit()
-        query = LoginAttempts.query.filter(LoginAttempts.Username==query.Username).all()
-        for attempt in query:
-            db.session.delete(attempt)
+        """Unlock a user and clear their failed-login attempts in one transaction."""
+        # Execute the database lookup with the filters specified below.
+        user = Users.query.filter(Users.Id == user_id).one()
+        user.IsLocked = False
+        # Execute the database lookup with the filters specified below.
+        LoginAttempts.query.filter(LoginAttempts.Username == user.Username).delete(
+            synchronize_session=False
+        )
+        # Commit the pending database changes so they persist beyond this request.
         db.session.commit()

@@ -1,3 +1,4 @@
+// Login.tsx: Renders the login interface and coordinates its local data and interactions.
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { FaMicrosoft } from "react-icons/fa";
@@ -11,6 +12,7 @@ import maatLogo from "../../images/MAAT.png";
 import "../../styling/Login.scss";
 
 declare global {
+  // Describes the window data expected by this file.
   interface Window {
     google?: {
       accounts: {
@@ -36,11 +38,13 @@ declare global {
   }
 }
 
+// Describes the id name pair data expected by this file.
 interface IdNamePair {
   name: string;
   id: number;
 }
 
+// Describes the class json data expected by this file.
 interface ClassJson {
   name: string;
   id: number;
@@ -48,14 +52,17 @@ interface ClassJson {
   lectures: Array<IdNamePair>;
 }
 
+// Describes the drop down option data expected by this file.
 interface DropDownOption {
   key: number;
   value: number;
   text: string;
 }
 
+// Describes the oauth provider data expected by this file.
 type OAuthProvider = "google" | "microsoft";
 
+// Describes the oauth config data expected by this file.
 interface OAuthConfig {
   enabled: boolean;
   provider: OAuthProvider;
@@ -69,6 +76,7 @@ interface OAuthConfig {
   microsoft_authority: string;
 }
 
+// Describes the oauth profile data expected by this file.
 interface OAuthProfile {
   provider: OAuthProvider;
   email: string;
@@ -77,6 +85,7 @@ interface OAuthProfile {
   display_name: string;
 }
 
+// Describes the session access summary data expected by this file.
 interface SessionAccessSummary {
   role?: number;
   can_teach?: boolean;
@@ -86,6 +95,7 @@ interface SessionAccessSummary {
 
 const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
 
+// Loads the Google sign-in script needed by the login interface.
 function loadGoogleScript(): Promise<void> {
   return new Promise((resolve, reject) => {
     if (window.google?.accounts?.id) {
@@ -112,6 +122,7 @@ function loadGoogleScript(): Promise<void> {
   });
 }
 
+// Renders the login interface and coordinates its local data and interactions.
 function Login() {
   const apiBase = (import.meta.env.VITE_API_URL as string) || "";
   const [searchParams] = useSearchParams();
@@ -127,6 +138,7 @@ function Login() {
       storedToken.trim().toLowerCase() !== "undefined"
   );
 
+  // Keeps the values that drive this component’s display and user interactions in React state.
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(initialLoggedIn);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -149,9 +161,11 @@ function Login() {
   const [oauthProfile, setOAuthProfile] = useState<OAuthProfile | null>(null);
   const [oauthSignupToken, setOAuthSignupToken] = useState<string>("");
 
+  // Keeps google button ref available across renders without triggering a state update.
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
   const requiresLabAndLecture = oauthConfig?.school.requires_lab_and_lecture ?? true;
 
+  // Keeps the persist session callback stable until its dependencies change.
   const persistSession = useCallback(
     (accessToken: string, _userRole: number, _accessSummary?: SessionAccessSummary) => {
       localStorage.setItem("AUTOTA_AUTH_TOKEN", accessToken);
@@ -160,6 +174,7 @@ function Login() {
     []
   );
 
+  // Keeps the reset new user selections callback stable until its dependencies change.
   const resetNewUserSelections = useCallback(() => {
     setClassId(-1);
     setLabId(-1);
@@ -171,13 +186,19 @@ function Login() {
     setHasClassSelected(false);
   }, []);
 
+  const currentSchoolRef = useRef(selectedSchoolId);
+  currentSchoolRef.current = selectedSchoolId;
+
+  // Keeps the fetch sections callback stable until its dependencies change.
   const fetchSections = useCallback(async () => {
     if (selectedSchoolId <= 0) {
       return;
     }
 
     try {
-      const res = await axios.get(`${apiBase}/class/sections?school_id=${selectedSchoolId}`);
+      // Fetches the server data needed for this operation.
+      const res = await axios.get(`${apiBase}/classes/get_class_labs?school_id=${selectedSchoolId}`);
+      if (currentSchoolRef.current !== selectedSchoolId) return;
       const sectionClasses = Array.isArray(res.data) ? (res.data as Array<ClassJson>) : [];
 
       setClasses(sectionClasses);
@@ -199,42 +220,51 @@ function Login() {
         setNewUserError("");
       }
     } catch (err) {
+      if (currentSchoolRef.current !== selectedSchoolId) return;
       console.error(err);
       setNewUserError("Could not load class options.");
     }
   }, [apiBase, selectedSchoolId]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     if (selectedSchoolId <= 0) {
       return;
     }
 
+    const controller = new AbortController();
     setOAuthConfig(null);
     setErrorMessage("");
 
     axios
-      .get(`${apiBase}/auth/oauth/config?school_id=${selectedSchoolId}`)
+      .get(`${apiBase}/auth/oauth_config?school_id=${selectedSchoolId}`, { signal: controller.signal })
       .then((res) => {
+        if (controller.signal.aborted) return;
         setOAuthConfig(res.data as OAuthConfig);
       })
       .catch((err: any) => {
+        if (controller.signal.aborted) return;
         setErrorMessage(err.response?.data?.message || "Login is not configured for this school.");
       });
+    return () => controller.abort();
   }, [apiBase, selectedSchoolId]);
 
+  // Loads or refreshes view data when the dependencies below change.
   useEffect(() => {
     if (isNewUser) {
       void fetchSections();
     }
   }, [fetchSections, isNewUser]);
 
+  // Keeps the handle oauth backend login callback stable until its dependencies change.
   const handleOAuthBackendLogin = useCallback(
     async (provider: OAuthProvider, idToken: string) => {
       setErrorMessage("");
       setIsLoading(true);
 
       try {
-        const res = await axios.post(`${apiBase}/auth/oauth/login`, {
+        // Sends this operation and its payload to the server.
+        const res = await axios.post(`${apiBase}/auth/oauth_login`, {
           provider,
           id_token: idToken,
           school_id: selectedSchoolId,
@@ -258,6 +288,7 @@ function Login() {
     [apiBase, persistSession, resetNewUserSelections, selectedSchoolId]
   );
 
+  // Loads or refreshes view data when the dependencies below change.
   useEffect(() => {
     if (
       oauthConfig?.provider !== "google" ||
@@ -268,9 +299,10 @@ function Login() {
       return;
     }
 
+    let cancelled = false;
     loadGoogleScript()
       .then(() => {
-        if (!window.google?.accounts?.id || !googleButtonRef.current) {
+        if (cancelled || !window.google?.accounts?.id || !googleButtonRef.current) {
           return;
         }
 
@@ -278,6 +310,7 @@ function Login() {
         window.google.accounts.id.initialize({
           client_id: oauthConfig.google_client_id,
           callback: (response) => {
+            if (cancelled) return;
             if (!response.credential) {
               setErrorMessage("Google login did not return an ID token.");
               return;
@@ -297,10 +330,12 @@ function Login() {
         });
       })
       .catch(() => {
-        setErrorMessage("Failed to initialize Google Sign-In.");
+        if (!cancelled) setErrorMessage("Failed to initialize Google Sign-In.");
       });
+    return () => { cancelled = true; };
   }, [handleOAuthBackendLogin, oauthConfig]);
 
+  // Handles microsoft login for this view.
   const handleMicrosoftLogin = async () => {
     if (
       oauthConfig?.provider !== "microsoft" ||
@@ -345,6 +380,7 @@ function Login() {
     }
   };
 
+  // Handles class id change for this view.
   const handleClassIdChange = (value: number) => {
     const selectedClass = classes.find((cls) => cls.id === value);
 
@@ -368,6 +404,7 @@ function Login() {
     setLectureOptions(newLectureOptions);
   };
 
+  // Handles new user submit for this view.
   const handleNewUserSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setNewUserError("");
@@ -393,7 +430,8 @@ function Login() {
     setIsLoading(true);
 
     try {
-      const res = await axios.post(`${apiBase}/auth/oauth/create`, {
+      // Sends this operation and its payload to the server.
+      const res = await axios.post(`${apiBase}/auth/create_oauth_user`, {
         signup_token: oauthSignupToken,
         id: studentNumber,
         school_id: selectedSchoolId,
@@ -411,26 +449,25 @@ function Login() {
   };
 
   if (isLoggedIn) {
+    // Renders the interface using the current data and interaction state.
     return <Navigate to="/schools" replace />;
   }
 
   if (selectedSchoolId <= 0) {
+    // Renders the interface using the current data and interaction state.
     return <Navigate to="/school-login" replace />;
   }
 
+  // Renders the interface using the current data and interaction state.
   return (
     <div className="login-page">
+      {/* Sets the page title and document metadata. */}
       <Helmet>
         <title>Login | MAAT</title>
       </Helmet>
 
+      {/* Displays the navigation and actions available on this page. */}
       <MenuComponent
-        showUpload={false}
-        showAdminUpload={false}
-        showHelp={false}
-        showCreate={false}
-        showLast={false}
-        showReviewButton={false}
       />
 
       {isNewUser ? (

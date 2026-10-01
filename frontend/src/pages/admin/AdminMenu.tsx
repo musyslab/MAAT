@@ -1,4 +1,5 @@
-import { KeyboardEvent, useEffect, useState } from "react";
+// AdminMenu.tsx: Renders the admin menu interface and coordinates its local data and interactions.
+import { ReactElement, KeyboardEvent, useEffect, useState } from "react";
 import axios from "axios";
 import { Link, useParams } from "react-router-dom";
 import { Helmet } from "react-helmet";
@@ -16,15 +17,17 @@ import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs";
 import "../../styling/Selection.scss";
 import "../../styling/AdminMenu.scss";
 
+// Describes the admin menu option data expected by this file.
 type AdminMenuOption = {
     title: string;
     description: string;
     to?: string;
-    icon: JSX.Element;
+    icon: ReactElement;
     actionLabel: string;
     disabled?: boolean;
 };
 
+// Describes the class access response data expected by this file.
 type ClassAccessResponse = {
     id?: number;
     name?: string;
@@ -32,7 +35,9 @@ type ClassAccessResponse = {
     school_name?: string;
 };
 
+// Renders the admin menu interface and coordinates its local data and interactions.
 export default function AdminMenu() {
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id, class_id } = useParams<{
         school_id: string;
         class_id: string;
@@ -40,8 +45,10 @@ export default function AdminMenu() {
 
     const schoolId = school_id || "";
     const classId = class_id || "";
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [className, setClassName] = useState("");
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (!schoolId || !classId) {
             setClassName("");
@@ -51,7 +58,7 @@ export default function AdminMenu() {
         axios
             .get<ClassAccessResponse>(
                 import.meta.env.VITE_API_URL +
-                `/class/id/${classId}/access?school_id=${schoolId}&role_context=admin`,
+                `/classes/validate_class_access/${classId}?school_id=${schoolId}&role_context=admin`,
                 {
                     headers: {
                         Authorization: `Bearer ${localStorage.getItem("AUTOTA_AUTH_TOKEN")}`,
@@ -90,7 +97,7 @@ export default function AdminMenu() {
         },
         {
             title: "Student View Preview",
-            description: "Preview the student-facing class experience without submitting work",
+            description: "Demonstrate student submissions, cooldowns, and feedback as the Test User",
             to: studentPreviewPath,
             icon: <FaEye aria-hidden="true" />,
             actionLabel: "Preview Student View",
@@ -111,6 +118,7 @@ export default function AdminMenu() {
         },
     ];
 
+    // Handles card key down for this view.
     const handleCardKeyDown = (
         event: KeyboardEvent<HTMLElement>,
         option: AdminMenuOption,
@@ -122,21 +130,19 @@ export default function AdminMenu() {
         window.location.href = option.to;
     };
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div className="projects-page admin-landing-root admin-menu-page">
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>[Admin] MAAT</title>
             </Helmet>
 
+            {/* Displays the navigation and actions available on this page. */}
             <MenuComponent
-                showUpload={false}
-                showAdminUpload={false}
-                showHelp={false}
-                showCreate={false}
-                showLast={false}
-                showReviewButton={false}
             />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={[
                     { label: "School Selection", to: "/schools" },
@@ -202,6 +208,7 @@ export default function AdminMenu() {
                         );
 
                         if (option.disabled || !option.to) {
+                            // Renders the interface using the current data and interaction state.
                             return (
                                 <article
                                     className={cardClasses}
@@ -214,6 +221,7 @@ export default function AdminMenu() {
                             );
                         }
 
+                        // Renders the interface using the current data and interaction state.
                         return (
                             <Link
                                 className={cardClasses}

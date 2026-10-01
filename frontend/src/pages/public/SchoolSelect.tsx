@@ -1,3 +1,4 @@
+// SchoolSelect.tsx: Renders the school select interface and coordinates its local data and interactions.
 import { Component, KeyboardEvent } from 'react'
 import axios from 'axios'
 import { NavigateFunction, useNavigate } from 'react-router-dom'
@@ -6,11 +7,13 @@ import MenuComponent from '../components/MenuComponent'
 import '../../styling/Selection.scss'
 import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs"
 
+// Describes the school object data expected by this file.
 interface SchoolObject {
     Id: number
     Name: string
 }
 
+// Describes the class object data expected by this file.
 interface ClassObject {
     id: number
     name: string
@@ -18,16 +21,19 @@ interface ClassObject {
     school_name?: string
 }
 
+// Describes the school state data expected by this file.
 interface SchoolState {
     teachingSchools: Array<SchoolObject>
     studentSchools: Array<SchoolObject>
     errorMessage: string
 }
 
+// Describes the school select props data expected by this file.
 interface SchoolSelectProps {
     navigate: NavigateFunction
 }
 
+// Reads the stored login token and rejects placeholder or missing values.
 const getValidStoredToken = (): string | null => {
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN")
 
@@ -49,11 +55,13 @@ const getValidStoredToken = (): string | null => {
     return cleanedToken
 }
 
+// Clears stored auth and redirect to login for this view.
 const clearStoredAuthAndRedirectToLogin = () => {
     localStorage.removeItem("AUTOTA_AUTH_TOKEN")
     window.location.replace("/login")
 }
 
+// Groups the available class records into school choices.
 const buildSchoolsFromClasses = (classes: Array<ClassObject>): Array<SchoolObject> => {
     const schoolsById = new Map<number, SchoolObject>()
 
@@ -75,6 +83,7 @@ const buildSchoolsFromClasses = (classes: Array<ClassObject>): Array<SchoolObjec
     )
 }
 
+// Extracts class rows from the returned response format.
 const readClassRows = (data: any): Array<ClassObject> => {
     if (Array.isArray(data)) {
         return data
@@ -109,13 +118,15 @@ class SchoolSelectInner extends Component<SchoolSelectProps, SchoolState> {
             Authorization: `Bearer ${token}`
         }
 
+        // Fetches the server data needed for this operation.
         const teachingRequest = axios.get(
-            import.meta.env.VITE_API_URL + `/class/all?include_school=true&role_context=admin`,
+            import.meta.env.VITE_API_URL + `/classes/get_classes_and_ids?include_school=true&role_context=admin`,
             { headers }
         )
 
+        // Fetches the server data needed for this operation.
         const studentRequest = axios.get(
-            import.meta.env.VITE_API_URL + `/class/all?include_school=true&role_context=student`,
+            import.meta.env.VITE_API_URL + `/classes/get_classes_and_ids?include_school=true&role_context=student`,
             { headers }
         )
 
@@ -181,6 +192,7 @@ class SchoolSelectInner extends Component<SchoolSelectProps, SchoolState> {
             return null
         }
 
+        // Renders the interface using the current data and interaction state.
         return (
             <section className="module-list-shell" aria-label={title}>
                 <div className="module-list-header-row">
@@ -231,21 +243,19 @@ class SchoolSelectInner extends Component<SchoolSelectProps, SchoolState> {
         const hasStudentSchools = studentSchools.length > 0
         const hasAnySchools = hasTeachingSchools || hasStudentSchools
 
+        // Renders the interface using the current data and interaction state.
         return (
             <div className="projects-page admin-landing-root">
+                {/* Sets the page title and document metadata. */}
                 <Helmet>
                     <title>MAAT</title>
                 </Helmet>
 
+                {/* Displays the navigation and actions available on this page. */}
                 <MenuComponent
-                    showUpload={false}
-                    showAdminUpload={false}
-                    showHelp={false}
-                    showCreate={false}
-                    showLast={false}
-                    showReviewButton={false}
                 ></MenuComponent>
 
+                {/* Shows the current location and links back to parent pages. */}
                 <DirectoryBreadcrumbs
                     items={[
                         { label: "School Selection" }
@@ -286,7 +296,9 @@ class SchoolSelectInner extends Component<SchoolSelectProps, SchoolState> {
     }
 }
 
+// Renders the school select interface and coordinates its local data and interactions.
 export default function SchoolSelect() {
     const navigate = useNavigate()
+    // Renders the interface using the current data and interaction state.
     return <SchoolSelectInner navigate={navigate} />
 }

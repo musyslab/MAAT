@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+// AdminOfficeHours.tsx: Displays the office-hours queue and manages helping sessions.
+import { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { Helmet } from "react-helmet";
 import { useParams } from "react-router-dom";
@@ -9,10 +10,12 @@ import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs";
 import "../../styling/Selection.scss";
 import "../../styling/AdminOfficeHours.scss";
 
+// Describes the class access response data expected by this file.
 type ClassAccessResponse = {
     name?: string;
 };
 
+// Describes the office hours entry data expected by this file.
 type OfficeHoursEntry = {
     id: number;
     user_id: number;
@@ -37,6 +40,7 @@ type OfficeHoursEntry = {
     completed_at: string | null;
 };
 
+// Describes the office hours queue response data expected by this file.
 type OfficeHoursQueueResponse = {
     waiting: OfficeHoursEntry[];
     helping: OfficeHoursEntry[];
@@ -54,15 +58,18 @@ type OfficeHoursQueueResponse = {
     message?: string;
 };
 
+// Builds the authorization header used by authenticated API requests.
 const authHeader = () => ({
     Authorization: `Bearer ${localStorage.getItem("AUTOTA_AUTH_TOKEN")}`,
 });
 
+// Helper for display name used by this component.
 const displayName = (entry: OfficeHoursEntry): string => {
     const name = `${entry.first_name || ""} ${entry.last_name || ""}`.trim();
     return name || entry.email || `Student ${entry.user_id}`;
 };
 
+// Formats clock time for this view.
 const formatClockTime = (value: string | null | undefined): string => {
     if (!value) return "—";
     const parsed = new Date(value);
@@ -75,6 +82,7 @@ const formatClockTime = (value: string | null | undefined): string => {
     }).format(parsed);
 };
 
+// Formats countdown for this view.
 const formatCountdown = (seconds: number): string => {
     const safeSeconds = Math.max(0, Math.ceil(seconds));
     const hours = Math.floor(safeSeconds / 3600);
@@ -85,15 +93,18 @@ const formatCountdown = (seconds: number): string => {
     return `${minutes}m ${secs}s`;
 };
 
+// Helper for history status label used by this component.
 const historyStatusLabel = (entry: OfficeHoursEntry): string => {
     if (entry.status === "expired_waiting") return "Expired in Waiting";
     return "Helped";
 };
 
+// Helper for history started at used by this component.
 const historyStartedAt = (entry: OfficeHoursEntry): string | null => {
     return entry.status === "expired_waiting" ? entry.joined_at : entry.selected_at;
 };
 
+// Helper for empty queue used by this component.
 const emptyQueue = (): OfficeHoursQueueResponse => ({
     waiting: [],
     helping: [],
@@ -110,7 +121,9 @@ const emptyQueue = (): OfficeHoursQueueResponse => ({
     session_duration_minutes: 120,
 });
 
+// Displays the office-hours queue and manages helping sessions.
 export default function AdminOfficeHours() {
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id, class_id } = useParams<{
         school_id: string;
         class_id: string;
@@ -118,6 +131,7 @@ export default function AdminOfficeHours() {
     const schoolId = school_id || "";
     const classId = Number(class_id || 0);
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [className, setClassName] = useState("");
     const [queue, setQueue] = useState<OfficeHoursQueueResponse>(emptyQueue);
     const [isLoading, setIsLoading] = useState(true);
@@ -126,6 +140,22 @@ export default function AdminOfficeHours() {
     const [errorMessage, setErrorMessage] = useState("");
     const [nowMs, setNowMs] = useState(() => Date.now());
 
+    const queueRequestRef = useRef<{ classId: number; controller: AbortController } | null>(null);
+    const currentClassRef = useRef(classId);
+    currentClassRef.current = classId;
+
+    useEffect(() => {
+        setQueue(emptyQueue);
+        setIsSaving(false);
+        setMessage("");
+        setErrorMessage("");
+        return () => {
+            queueRequestRef.current?.controller.abort();
+            queueRequestRef.current = null;
+        };
+    }, [classId]);
+
+    // Keeps the apply queue callback stable until its dependencies change.
     const applyQueue = useCallback((nextQueue: OfficeHoursQueueResponse) => {
         setQueue({
             waiting: Array.isArray(nextQueue?.waiting) ? nextQueue.waiting : [],
@@ -145,54 +175,75 @@ export default function AdminOfficeHours() {
         });
     }, []);
 
+    // Keeps the load queue callback stable until its dependencies change.
     const loadQueue = useCallback(async (showLoading = false) => {
-        if (!classId) return;
+        if (!Number.isSafeInteger(classId) || classId <= 0) {
+            setIsLoading(false);
+            return;
+        }
+        if (queueRequestRef.current?.classId === classId) return;
+        queueRequestRef.current?.controller.abort();
+        const controller = new AbortController();
+        queueRequestRef.current = { classId, controller };
         if (showLoading) setIsLoading(true);
 
         try {
+            // Fetches the server data needed for this operation.
             const response = await axios.get<OfficeHoursQueueResponse>(
-                `${import.meta.env.VITE_API_URL}/submissions/office-hours/queue`,
+                `${import.meta.env.VITE_API_URL}/office_hours/office_hours_queue`,
                 {
                     headers: authHeader(),
                     params: { class_id: classId },
+                    signal: controller.signal,
                 },
             );
+            if (controller.signal.aborted || currentClassRef.current !== classId) return;
             applyQueue(response.data);
             setErrorMessage("");
         } catch (error: any) {
+            if (controller.signal.aborted || currentClassRef.current !== classId) return;
             setErrorMessage(
                 error?.response?.data?.message ||
                 "Could not load the office-hours queue.",
             );
         } finally {
-            if (showLoading) setIsLoading(false);
+            if (queueRequestRef.current?.controller === controller) queueRequestRef.current = null;
+            if (!controller.signal.aborted && currentClassRef.current === classId && showLoading) setIsLoading(false);
         }
     }, [applyQueue, classId]);
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (!schoolId || !classId) return;
 
+        const controller = new AbortController();
+        setClassName("");
         axios
             .get<ClassAccessResponse>(
-                `${import.meta.env.VITE_API_URL}/class/id/${classId}/access`,
+                `${import.meta.env.VITE_API_URL}/classes/validate_class_access/${classId}`,
                 {
+                    signal: controller.signal,
                     headers: authHeader(),
                     params: { school_id: schoolId, role_context: "admin" },
                 },
             )
-            .then((response) => setClassName(response.data?.name || ""))
-            .catch(() => setClassName(""));
+            .then((response) => { if (!controller.signal.aborted) setClassName(response.data?.name || ""); })
+            .catch(() => { if (!controller.signal.aborted) setClassName(""); });
+        return () => controller.abort();
     }, [classId, schoolId]);
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         loadQueue(true);
     }, [loadQueue]);
 
+    // Registers browser listeners and cleans them up when this effect reruns or the component unmounts.
     useEffect(() => {
         const interval = window.setInterval(() => {
             if (document.visibilityState === "visible") loadQueue(false);
         }, 10_000);
 
+        // Refreshes when visible for this view.
         const refreshWhenVisible = () => {
             if (document.visibilityState === "visible") loadQueue(false);
         };
@@ -207,6 +258,7 @@ export default function AdminOfficeHours() {
         };
     }, [loadQueue]);
 
+    // Starts a timer for periodic updates and clears it during effect cleanup.
     useEffect(() => {
         const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
         return () => window.clearInterval(interval);
@@ -226,6 +278,7 @@ export default function AdminOfficeHours() {
         Math.round(Number(queue.session_duration_minutes || 120) / 60),
     );
 
+    // Starts office hours for this view.
     const startOfficeHours = async () => {
         if (!classId || isSaving || officeHoursActive) return;
         setIsSaving(true);
@@ -233,26 +286,30 @@ export default function AdminOfficeHours() {
         setErrorMessage("");
 
         try {
+            // Sends this operation and its payload to the server.
             const response = await axios.post<OfficeHoursQueueResponse>(
-                `${import.meta.env.VITE_API_URL}/submissions/office-hours/session`,
+                `${import.meta.env.VITE_API_URL}/office_hours/office_hours_start_session`,
                 { class_id: classId },
                 { headers: authHeader() },
             );
+            if (currentClassRef.current !== classId) return;
             applyQueue(response.data);
             setMessage(
                 response.data?.message ||
                 `Office hours started for ${sessionDurationHours} hours.`,
             );
         } catch (error: any) {
+            if (currentClassRef.current !== classId) return;
             setErrorMessage(
                 error?.response?.data?.message ||
                 "Could not start office hours.",
             );
         } finally {
-            setIsSaving(false);
+            if (currentClassRef.current === classId) setIsSaving(false);
         }
     };
 
+    // Starts helping for this view.
     const startHelping = async (studentId: number) => {
         if (!classId || !studentId || isSaving || !officeHoursActive) return;
         setIsSaving(true);
@@ -260,29 +317,33 @@ export default function AdminOfficeHours() {
         setErrorMessage("");
 
         try {
+            // Sends this operation and its payload to the server.
             const response = await axios.post<OfficeHoursQueueResponse>(
-                `${import.meta.env.VITE_API_URL}/submissions/office-hours/help`,
+                `${import.meta.env.VITE_API_URL}/office_hours/office_hours_help_student`,
                 {
                     class_id: classId,
                     student_id: studentId,
                 },
                 { headers: authHeader() },
             );
+            if (currentClassRef.current !== classId) return;
             applyQueue(response.data);
             setMessage(
                 response.data?.message ||
                 `The student can now submit without a cooldown for up to ${queue.help_duration_minutes || 30} minutes.`,
             );
         } catch (error: any) {
+            if (currentClassRef.current !== classId) return;
             setErrorMessage(
                 error?.response?.data?.message ||
                 "Could not start the help session.",
             );
         } finally {
-            setIsSaving(false);
+            if (currentClassRef.current === classId) setIsSaving(false);
         }
     };
 
+    // Ends helping for this view.
     const endHelping = async (studentId: number) => {
         if (!classId || !studentId || isSaving) return;
         setIsSaving(true);
@@ -290,41 +351,42 @@ export default function AdminOfficeHours() {
         setErrorMessage("");
 
         try {
+            // Sends this operation and its payload to the server.
             const response = await axios.post<OfficeHoursQueueResponse>(
-                `${import.meta.env.VITE_API_URL}/submissions/office-hours/complete`,
+                `${import.meta.env.VITE_API_URL}/office_hours/office_hours_complete_student`,
                 {
                     class_id: classId,
                     student_id: studentId,
                 },
                 { headers: authHeader() },
             );
+            if (currentClassRef.current !== classId) return;
             applyQueue(response.data);
             setMessage(response.data?.message || "The help session ended.");
         } catch (error: any) {
+            if (currentClassRef.current !== classId) return;
             setErrorMessage(
                 error?.response?.data?.message ||
                 "Could not end the help session.",
             );
         } finally {
-            setIsSaving(false);
+            if (currentClassRef.current === classId) setIsSaving(false);
         }
     };
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div className="projects-page admin-office-hours-page">
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>[Admin] Office Hours | MAAT</title>
             </Helmet>
 
+            {/* Displays the navigation and actions available on this page. */}
             <MenuComponent
-                showUpload={false}
-                showAdminUpload={false}
-                showHelp={false}
-                showCreate={false}
-                showLast={false}
-                showReviewButton={false}
             />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={[
                     { label: "School Selection", to: "/schools" },

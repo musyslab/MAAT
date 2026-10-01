@@ -1,3 +1,4 @@
+// StudentUpload.tsx: Manages file selection, program execution, submission history, cooldowns, and student feedback.
 import React, { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import MenuComponent from "../components/MenuComponent";
@@ -19,7 +20,6 @@ import {
   FaAlignJustify,
   FaArrowRight,
   FaBan,
-  FaBolt,
   FaCloudUploadAlt,
   FaCompressAlt,
   FaCode,
@@ -40,6 +40,7 @@ import {
   FaUsers,
 } from "react-icons/fa";
 
+// Describes the checkpoint lite data expected by this file.
 type CheckpointLite = {
   id: number;
   number?: number;
@@ -49,11 +50,8 @@ type CheckpointLite = {
   rewarded?: boolean;
 };
 
-type AssignedClassLite = {
-  id: number;
-  school_id?: number;
-};
 
+// Describes the module object lite data expected by this file.
 type ModuleObjectLite = {
   Id: number;
   ClassId: number;
@@ -66,6 +64,7 @@ type ModuleObjectLite = {
   PresentationFileName?: string;
 };
 
+// Describes the past submission main data expected by this file.
 type PastSubmissionMain = {
   submissionId?: number;
   submission_id?: number;
@@ -75,6 +74,7 @@ type PastSubmissionMain = {
   time?: string;
 };
 
+// Describes the past submission checkpoint data expected by this file.
 type PastSubmissionCheckpoint = {
   checkpointId?: number;
   checkpoint_id?: number;
@@ -90,6 +90,7 @@ type PastSubmissionCheckpoint = {
   time?: string;
 };
 
+// Describes the api past submissions project data expected by this file.
 type ApiPastSubmissionsProject = {
   projectId?: number;
   project_id?: number;
@@ -102,11 +103,13 @@ type ApiPastSubmissionsProject = {
   practices?: PastSubmissionCheckpoint[];
 };
 
+// Describes the latest past submission data expected by this file.
 type LatestPastSubmission = {
   submissionId: number | string;
   passed: boolean;
 };
 
+// Describes the incentive state data expected by this file.
 type IncentiveState = {
   stars?: number;
   star_balance?: number;
@@ -132,6 +135,7 @@ type IncentiveState = {
   reward_started_early?: boolean;
 };
 
+// Describes the office hours status data expected by this file.
 type OfficeHoursStatus = {
   status?: "not_queued" | "waiting" | "being_helped";
   office_hours_active?: boolean;
@@ -142,14 +146,18 @@ type OfficeHoursStatus = {
   queue_position?: number | null;
 };
 
+// Describes the submission method data expected by this file.
 type SubmissionMethod = "editor" | "upload";
 
+// Describes the student upload section data expected by this file.
 type StudentUploadSection = "instructions" | "submission" | "testcases";
 
+// Describes the student upload props data expected by this file.
 type StudentUploadProps = {
   initialSection?: StudentUploadSection;
 };
 
+// Describes the assignment preview data expected by this file.
 type AssignmentPreview = {
   url: string;
   contentType: string;
@@ -171,17 +179,21 @@ const MAIN_SCHEDULE = [
   { attempt: 5, label: "Attempt 5+", value: "20 minutes" },
 ];
 
+// Builds the authorization header used by authenticated API requests.
 const authHeader = () => ({
+  ...(window.location.pathname.includes("/student-preview") ? { "X-MAAT-Test-User": "1" } : {}),
   Authorization: `Bearer ${localStorage.getItem("AUTOTA_AUTH_TOKEN")}`,
 });
 
+// Parses an identifier and rejects values that are not positive integers.
 const parsePositiveInt = (value: string | undefined): number | null => {
   if (value === undefined || !/^\d+$/.test(value)) return null;
 
   const parsed = parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
+// Normalizes maybe json for this view.
 const normalizeMaybeJson = <T,>(item: unknown): T => {
   if (typeof item === "string") {
     return JSON.parse(item) as T;
@@ -190,6 +202,7 @@ const normalizeMaybeJson = <T,>(item: unknown): T => {
   return item as T;
 };
 
+// Validates a submission ID before using it to retrieve submission details.
 const normalizePositiveSubmissionId = (
   value: number | string | null | undefined,
 ): number | string | null => {
@@ -198,35 +211,14 @@ const normalizePositiveSubmissionId = (
   }
 
   const n = Number(value);
-  if (Number.isFinite(n) && n > 0) {
-    return Number.isInteger(n) ? n : String(value);
+  if (Number.isSafeInteger(n) && n > 0) {
+    return n;
   }
 
   return null;
 };
 
-const getPayloadSubmissionId = (payload: any): number | string | null => {
-  const candidates = [
-    payload?.submission_id,
-    payload?.SubmissionId,
-    payload?.submissionId,
-    payload?.sid,
-    payload?.Sid,
-    payload?.id,
-    payload?.Id,
-    payload?.latest_submission_id,
-    payload?.LatestSubmissionId,
-    payload?.submission?.id,
-    payload?.submission?.Id,
-  ];
-
-  const found = candidates.find(
-    (candidate) => candidate !== undefined && candidate !== null && candidate !== "",
-  );
-
-  return normalizePositiveSubmissionId(found);
-};
-
+// Recognizes the pass values returned by the submission API.
 const isPassedValue = (value: unknown): boolean => {
   if (value === true || value === 1) return true;
   if (typeof value !== "string") return false;
@@ -236,20 +228,12 @@ const isPassedValue = (value: unknown): boolean => {
   );
 };
 
-const isPassedTestcase = (result: any): boolean => {
-  return isPassedValue(
-    result?.passed ??
-    result?.ok ??
-    result?.State ??
-    result?.state ??
-    result?.status,
-  );
-};
-
+// Returns past project id for this view.
 const getPastProjectId = (row: ApiPastSubmissionsProject): number => {
   return Number(row?.projectId ?? row?.project_id ?? row?.id ?? row?.Id ?? 0);
 };
 
+// Returns past main submission for this view.
 const getPastMainSubmission = (
   row: ApiPastSubmissionsProject,
 ): LatestPastSubmission | null => {
@@ -268,6 +252,7 @@ const getPastMainSubmission = (
     };
 };
 
+// Returns past checkpoint id for this view.
 const getPastCheckpointId = (row: PastSubmissionCheckpoint): number => {
   return Number(
     row?.checkpointId ??
@@ -280,6 +265,7 @@ const getPastCheckpointId = (row: PastSubmissionCheckpoint): number => {
   );
 };
 
+// Returns past checkpoint submission for this view.
 const getPastCheckpointSubmission = (
   row: PastSubmissionCheckpoint,
 ): LatestPastSubmission | null => {
@@ -295,6 +281,7 @@ const getPastCheckpointSubmission = (
     };
 };
 
+// Helper for submission id as number used by this component.
 const submissionIdAsNumber = (
   value: number | string | null | undefined,
 ): number | null => {
@@ -305,16 +292,16 @@ const submissionIdAsNumber = (
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
+// Manages file selection, program execution, submission history, cooldowns, and student feedback.
 const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
+  // Reads the school, class, or assignment identifiers from the current route.
   const {
-    id,
     school_id,
     class_id,
     module_id,
     project_id: route_project_id,
     checkpoint_id,
   } = useParams<{
-    id?: string;
     school_id?: string;
     class_id?: string;
     module_id?: string;
@@ -327,7 +314,6 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
   const schoolId = parsePositiveInt(school_id);
   const moduleId = parsePositiveInt(module_id);
   const routeProjectId = parsePositiveInt(route_project_id);
-  const routeSubmissionId = parsePositiveInt(id);
 
   const checkpointId = parsePositiveInt(checkpoint_id);
   const isCheckpoint = checkpointId !== null;
@@ -340,6 +326,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       ? `/admin/school/${schoolId}/class/${cid}/student-preview`
       : "";
 
+  // Keeps the values that drive this component’s display and user interactions in React state.
   const [files, setFiles] = useState<File[]>([]);
   const [mainJavaFileName, setMainJavaFileName] = useState<string>("");
   const [submissionMethod, setSubmissionMethod] =
@@ -356,13 +343,11 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     useState<boolean>(true);
 
   const [project_id, setProject_id] = useState<number>(routeProjectId ?? 0);
-  const is_allowed_to_submit = !isAdminPreview;
+  const is_allowed_to_submit = true;
 
-  const [suggestions, setSuggestions] = useState<string>("");
-  const feedbackRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Keeps the values that drive this component’s display and user interactions in React state.
   const [project_name, setProject_name] = useState<string>("");
-  const [dueDate, setDueDate] = useState<string>("");
 
   const [passedAllTests, setPassedAllTests] = useState<boolean>(false);
   const [checkedPassedAll, setCheckedPassedAll] = useState<boolean>(false);
@@ -386,8 +371,6 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
   const [modulePresentationFileName, setModulePresentationFileName] =
     useState<string>("");
   const [checkpointLabel, setCheckpointLabel] = useState<string>("");
-  const [hideClassSelectionCrumb, setHideClassSelectionCrumb] =
-    useState<boolean>(false);
   const [assignmentPreview, setAssignmentPreview] =
     useState<AssignmentPreview | null>(null);
   const [isAssignmentPreviewLoading, setIsAssignmentPreviewLoading] =
@@ -407,10 +390,51 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
   const [isPresentationPreviewExpanded, setIsPresentationPreviewExpanded] =
     useState<boolean>(false);
   const [activeSubmissionId, setActiveSubmissionId] =
-    useState<number | null>(routeSubmissionId);
+    useState<number | null>(null);
+  // Keeps results ref available across renders without triggering a state update.
   const resultsRef = useRef<HTMLElement | null>(null);
+  // Keeps initial section applied ref available across renders without triggering a state update.
   const initialSectionAppliedRef = useRef<boolean>(false);
+  const requestScopeKey = JSON.stringify([cid, moduleId, routeProjectId, project_id, checkpointId, isAdminPreview]);
+  const currentRequestScopeRef = useRef(requestScopeKey);
+  currentRequestScopeRef.current = requestScopeKey;
+  const requestSequenceRef = useRef(new Map<string, number>());
+  const mountedRef = useRef(false);
+  const submitInFlightRef = useRef(false);
 
+  const beginScopedRequest = useCallback((name: string) => {
+    const sequence = (requestSequenceRef.current.get(name) || 0) + 1;
+    requestSequenceRef.current.set(name, sequence);
+    return () => mountedRef.current &&
+      currentRequestScopeRef.current === requestScopeKey &&
+      requestSequenceRef.current.get(name) === sequence;
+  }, [requestScopeKey]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    submitInFlightRef.current = false;
+    setIsLoading(false);
+    setPassedAllTests(false);
+    setCheckedPassedAll(false);
+    setPreviousSubmissionId(null);
+    setTestcasesPassedCount(0);
+    setTestcasesTotalCount(0);
+    setCooldownLiftedAtMs(0);
+    setIncentives(null);
+    setOfficeHoursStatus(null);
+    setIsSkipConfirmationOpen(false);
+    setIsSkippingCooldown(false);
+    setError_Message("");
+    setIsErrorMessageHidden(true);
+    return () => {
+      mountedRef.current = false;
+      for (const [name, value] of requestSequenceRef.current) {
+        requestSequenceRef.current.set(name, value + 1);
+      }
+    };
+  }, [requestScopeKey]);
+
+  // Keeps the scroll to section callback stable until its dependencies change.
   const scrollToSection = useCallback((section: StudentUploadSection) => {
     setActiveWorkspaceSection(section);
     window.requestAnimationFrame(() => {
@@ -421,6 +445,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     });
   }, []);
 
+  // Keeps the open assignment preview callback stable until its dependencies change.
   const openAssignmentPreview = useCallback(() => {
     if (!assignmentPreview?.url) return;
 
@@ -433,6 +458,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     if (previewWindow) previewWindow.opener = null;
   }, [assignmentPreview]);
 
+  // Keeps the open presentation preview callback stable until its dependencies change.
   const openPresentationPreview = useCallback(() => {
     if (!presentationPreview?.url) return;
 
@@ -445,6 +471,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     if (previewWindow) previewWindow.opener = null;
   }, [presentationPreview]);
 
+  // Keeps the show submission results callback stable until its dependencies change.
   const showSubmissionResults = useCallback(
     (submissionId: number | string | null | undefined) => {
       const nextSubmissionId = submissionIdAsNumber(submissionId);
@@ -456,12 +483,8 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     [scrollToSection],
   );
 
-  const autoGrowTextarea = (el: HTMLTextAreaElement | null) => {
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  };
 
+  // Keeps the load module presentation status callback stable until its dependencies change.
   const loadModulePresentationStatus = useCallback(
     (targetProjectId: number) => {
       if (!Number.isFinite(cid) || cid <= 0 || targetProjectId <= 0) {
@@ -474,14 +497,16 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       setHasModulePresentation(false);
       setModulePresentationFileName("");
 
+      const isCurrent = beginScopedRequest("modulePresentation");
       axios
         .get(
-          `${import.meta.env.VITE_API_URL}/projects/get_modules_by_class_id_student?id=${cid}`,
+          `${import.meta.env.VITE_API_URL}/assignment_tracking/get_modules_by_class_id_student?id=${cid}`,
           {
             headers: authHeader(),
           },
         )
         .then((res) => {
+          if (!isCurrent()) return;
           const modules: ModuleObjectLite[] = Array.isArray(res.data)
             ? res.data.map((item: unknown) =>
               normalizeMaybeJson<ModuleObjectLite>(item),
@@ -513,6 +538,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
           );
         })
         .catch(() => {
+          if (!isCurrent()) return;
           setHasModulePresentation(false);
           setModulePresentationFileName("");
           if (hasModuleRoute) {
@@ -520,9 +546,10 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
           }
         });
     },
-    [cid, hasModuleRoute, moduleId, isAdminPreview],
+    [cid, hasModuleRoute, moduleId, isAdminPreview, beginScopedRequest],
   );
 
+  // Recomputes testcase progress only when its dependencies change.
   const testcaseProgress = useMemo(() => {
     const total = Math.max(0, testcasesTotalCount);
     const passed = Math.max(0, Math.min(testcasesPassedCount, total));
@@ -537,6 +564,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     !passedAllTests &&
     (activeSubmissionId !== null || previousSubmissionId !== null);
 
+  // Recomputes cooldown remaining seconds only when its dependencies change.
   const cooldownRemainingSeconds = useMemo(() => {
     return Math.max(0, Math.ceil((cooldownLiftedAtMs - nowMs) / 1000));
   }, [cooldownLiftedAtMs, nowMs]);
@@ -601,18 +629,19 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       ? pythonIdeEnabled && Boolean(pythonSource.trim())
       : files.length > 0;
   const canSubmit =
-    !isAdminPreview &&
     !passedAllTests &&
     !isCoolingDown &&
     !isCooldownStateLoading &&
     hasSelectedProgram;
 
+  // Formats cooldown for this view.
   const formatCooldown = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  // Formats duration for this view.
   const formatDuration = (seconds: number) => {
     const safeSeconds = Math.max(0, Math.ceil(seconds));
     const days = Math.floor(safeSeconds / 86400);
@@ -631,15 +660,18 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     return `${minutes}:${secs.toString().padStart(2, "0")}`;
   };
 
+  // Formats star value for this view.
   const formatStarValue = (value: number): string => {
     if (!Number.isFinite(value)) return "0";
     return Number.isInteger(value) ? `${value}` : value.toFixed(1);
   };
 
+  // Formats star count for this view.
   const formatStarCount = (value: number): string => {
     return `${formatStarValue(value)} ${value === 1 ? "star" : "stars"}`;
   };
 
+  // Recomputes early start deadline ms only when its dependencies change.
   const earlyStartDeadlineMs = useMemo(() => {
     const rawDeadline = incentives?.early_start_deadline;
     if (!rawDeadline) return 0;
@@ -688,6 +720,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
         : "Early bonus window closed."
     : "Early bonus timer unavailable.";
 
+  // Converts the server cooldown expiry into milliseconds for the countdown.
   const cooldownLiftedAtToMs = (
     cooldownLiftedAt: unknown,
     remainingSeconds: unknown,
@@ -707,6 +740,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     return 0;
   };
 
+  // Keeps the build upload state scope callback stable until its dependencies change.
   const buildUploadStateScope = useCallback(() => {
     if (!Number.isFinite(cid) || cid <= 0 || !project_id || project_id <= 0 || project_id === -1) {
       return null;
@@ -720,13 +754,8 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     };
   }, [cid, project_id, isCheckpoint, checkpointId]);
 
+  // Keeps the load student upload state callback stable until its dependencies change.
   const loadStudentUploadState = useCallback(() => {
-    if (isAdminPreview) {
-      setPreviousSubmissionId(null);
-      setCooldownLiftedAtMs(0);
-      return;
-    }
-
     const scope = buildUploadStateScope();
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
@@ -735,12 +764,15 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       return;
     }
 
+    const isCurrent = beginScopedRequest("uploadState");
+
     axios
-      .get(`${import.meta.env.VITE_API_URL}/submissions/student-upload-state`, {
-        headers: { Authorization: `Bearer ${token}` },
+      .get(`${import.meta.env.VITE_API_URL}/upload/student_upload_state`, {
+        headers: authHeader(),
         params: scope,
       })
       .then((res) => {
+        if (!isCurrent()) return;
         const latestSubmission = normalizePositiveSubmissionId(
           res?.data?.last_submission_id ?? res?.data?.previous_submission_id,
         );
@@ -767,9 +799,10 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       .catch(() => {
         // incentive-state independently loads the authoritative cooldown timer.
       });
-  }, [buildUploadStateScope, isAdminPreview]);
+  }, [buildUploadStateScope, isAdminPreview, beginScopedRequest]);
 
 
+  // Keeps the load incentive state callback stable until its dependencies change.
   const loadIncentiveState = useCallback((showLoading = false) => {
     const scope = buildUploadStateScope();
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
@@ -786,29 +819,16 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       setIsCooldownStateLoading(true);
     }
 
+    const isCurrent = beginScopedRequest("incentives");
+
     axios
-      .get(`${import.meta.env.VITE_API_URL}/submissions/incentive-state`, {
-        headers: { Authorization: `Bearer ${token}` },
+      .get(`${import.meta.env.VITE_API_URL}/submissions/incentive_state`, {
+        headers: authHeader(),
         params: scope,
       })
       .then((res) => {
+        if (!isCurrent()) return;
         const state = res.data || null;
-
-        if (isAdminPreview) {
-          setIncentives({
-            ...(state || {}),
-            stars: 0,
-            star_balance: 0,
-            submission_attempt_count: 0,
-            next_attempt_number: 1,
-            submission_cooldown_seconds: 0,
-            cooldown_remaining_seconds: 0,
-            office_hours_cooldown_exempt: false,
-            office_hours_cooldown_exempt_until: null,
-          });
-          setCooldownLiftedAtMs(0);
-          return;
-        }
 
         setIncentives(state);
         setCooldownLiftedAtMs(
@@ -819,16 +839,19 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
         );
       })
       .catch(() => {
+        if (!isCurrent()) return;
         if (showLoading) {
           setIncentives(null);
           setCooldownLiftedAtMs(0);
         }
       })
       .finally(() => {
+        if (!isCurrent()) return;
         if (showLoading) setIsCooldownStateLoading(false);
       });
-  }, [buildUploadStateScope, isAdminPreview]);
+  }, [buildUploadStateScope, isAdminPreview, beginScopedRequest]);
 
+  // Keeps the load office hours status callback stable until its dependencies change.
   const loadOfficeHoursStatus = useCallback(() => {
     if (isAdminPreview) {
       setOfficeHoursStatus(null);
@@ -842,20 +865,23 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       return;
     }
 
+    const isCurrent = beginScopedRequest("officeHours");
+
     axios
-      .get(`${import.meta.env.VITE_API_URL}/submissions/office-hours/status`, {
-        headers: { Authorization: `Bearer ${token}` },
+      .get(`${import.meta.env.VITE_API_URL}/office_hours/office_hours_student_status`, {
+        headers: authHeader(),
         params: {
           class_id: cid,
           module_id: officeHoursModuleId,
         },
       })
-      .then((res) => setOfficeHoursStatus(res.data || null))
+      .then((res) => { if (isCurrent()) setOfficeHoursStatus(res.data || null); })
       .catch(() => {
         // Keep the last confirmed status during a transient polling failure.
       });
-  }, [cid, officeHoursModuleId, isAdminPreview]);
+  }, [cid, officeHoursModuleId, isAdminPreview, beginScopedRequest]);
 
+  // Skips submission cooldown for this view.
   const skipSubmissionCooldown = () => {
     if (isAdminPreview) {
       setIsSkipConfirmationOpen(false);
@@ -870,22 +896,25 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       return;
     }
 
+    const isCurrent = beginScopedRequest("skipCooldown");
     setIsSkippingCooldown(true);
     setIsErrorMessageHidden(true);
     setError_Message("");
 
     axios
       .post(
-        `${import.meta.env.VITE_API_URL}/submissions/skip-submission-cooldown`,
+        `${import.meta.env.VITE_API_URL}/submissions/skip_submission_cooldown`,
         scope,
-        { headers: { Authorization: `Bearer ${token}` } },
+        { headers: authHeader() },
       )
       .then((res) => {
+        if (!isCurrent()) return;
         setCooldownLiftedAtMs(0);
         setNowMs(Date.now());
         setIncentives(res.data || null);
       })
       .catch((err) => {
+        if (!isCurrent()) return;
         setError_Message(
           err.response?.data?.message ||
           "Could not skip the submission timer. Please try again.",
@@ -893,11 +922,13 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
         setIsErrorMessageHidden(false);
       })
       .finally(() => {
+        if (!isCurrent()) return;
         setIsSkippingCooldown(false);
         setIsSkipConfirmationOpen(false);
       });
   };
 
+  // Starts submission cooldown for this view.
   const startSubmissionCooldown = (seconds: number) => {
     const safeSeconds = Math.max(0, Math.ceil(seconds));
 
@@ -908,14 +939,18 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
   };
 
   const ALLOWED_EXTS = [".py", ".java", ".c", ".rkt"];
+  // Checks java file for this view.
   const isJavaFile = (f: File) => f.name.toLowerCase().endsWith(".java");
+  // Checks java file name for this view.
   const isJavaFileName = (n: string) => /\.java$/i.test(n);
 
+  // Checks allowed file name for this view.
   const isAllowedFileName = (name: string) => {
     const ext = "." + (name.split(".").pop() || "").toLowerCase();
     return ALLOWED_EXTS.includes(ext);
   };
 
+  // Stores the previous submission ID for later history comparisons.
   const rememberPreviousSubmissionId = (submissionId: number | string | null) => {
     const normalized = normalizePositiveSubmissionId(submissionId);
 
@@ -926,10 +961,12 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     setPreviousSubmissionId(normalized);
   };
 
+  // Clears the remembered previous submission ID when its context changes.
   const clearPreviousSubmissionId = () => {
     setPreviousSubmissionId(null);
   };
 
+  // Finds the most recent matching submission in the returned history.
   const resolveLatestSubmissionFromPastSubmissions = (
     rows: ApiPastSubmissionsProject[],
   ): LatestPastSubmission | null => {
@@ -965,16 +1002,8 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     return getPastMainSubmission(projectRow);
   };
 
+  // Fetches latest submission from past submissions for this view.
   const fetchLatestSubmissionFromPastSubmissions = (): Promise<LatestPastSubmission | null> => {
-    if (isAdminPreview) {
-      clearPreviousSubmissionId();
-      setPassedAllTests(false);
-      setTestcasesPassedCount(0);
-      setTestcasesTotalCount(0);
-      setCheckedPassedAll(true);
-      return Promise.resolve(null);
-    }
-
     const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
     if (
@@ -989,11 +1018,13 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       return Promise.resolve(null);
     }
 
+    const isCurrent = beginScopedRequest("pastSubmissions");
     return axios
-      .get(`${import.meta.env.VITE_API_URL}/projects/past-submissions`, {
-        headers: { Authorization: `Bearer ${token}` },
+      .get(`${import.meta.env.VITE_API_URL}/assignment_tracking/past_submissions`, {
+        headers: authHeader(),
       })
       .then((res) => {
+        if (!isCurrent()) return null;
         const rows: ApiPastSubmissionsProject[] =
           typeof res.data === "string" ? JSON.parse(res.data) : (res.data ?? []);
 
@@ -1013,7 +1044,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
         return null;
       })
       .catch(() => {
-        clearPreviousSubmissionId();
+        if (!isCurrent()) return null;
         setTestcasesPassedCount(0);
         setTestcasesTotalCount(0);
         setCheckedPassedAll(true);
@@ -1023,6 +1054,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
 
   const JAVA_MAIN_RE = /\bpublic\s+static\s+void\s+main\s*\(/;
 
+  // Selects the Java entry file from the available solution or submission files.
   function pickMainJavaFile(
     allJavaNames: string[],
     namesWithMain: string[],
@@ -1037,13 +1069,11 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     return namesWithMain[0] || "";
   }
 
+  // Computes main java from local for this view.
   async function computeMainJavaFromLocal(localFiles: File[]) {
     const javaFiles = localFiles.filter((f) => isJavaFileName(f.name));
 
-    if (javaFiles.length <= 1) {
-      setMainJavaFileName("");
-      return;
-    }
+    if (javaFiles.length <= 1) return "";
 
     const withMain: string[] = [];
 
@@ -1056,14 +1086,10 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       }
     }
 
-    setMainJavaFileName(
-      pickMainJavaFile(
-        javaFiles.map((f) => f.name),
-        withMain,
-      ),
-    );
+    return pickMainJavaFile(javaFiles.map((f) => f.name), withMain);
   }
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     let cancelled = false;
 
@@ -1073,7 +1099,8 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
         return;
       }
 
-      await computeMainJavaFromLocal(files);
+      const filename = await computeMainJavaFromLocal(files);
+      if (!cancelled) setMainJavaFileName(filename);
     })();
 
     return () => {
@@ -1082,23 +1109,25 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [files]);
 
-  useEffect(() => {
-    autoGrowTextarea(feedbackRef.current);
-  }, [suggestions]);
 
+  // Loads or refreshes view data when the dependencies below change.
   useEffect(() => {
     loadStudentUploadState();
   }, [loadStudentUploadState]);
 
+  // Loads or refreshes view data when the dependencies below change.
   useEffect(() => {
     loadIncentiveState(true);
   }, [loadIncentiveState]);
 
+  // Loads or refreshes view data when the dependencies below change.
   useEffect(() => {
     loadOfficeHoursStatus();
   }, [loadOfficeHoursStatus]);
 
+  // Registers browser listeners and cleans them up when this effect reruns or the component unmounts.
   useEffect(() => {
+    // Refreshes cooldown state for this view.
     const refreshCooldownState = () => {
       if (document.visibilityState !== "visible") return;
       loadStudentUploadState();
@@ -1115,6 +1144,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     };
   }, [loadStudentUploadState, loadIncentiveState, loadOfficeHoursStatus]);
 
+  // Starts a timer for periodic updates and clears it during effect cleanup.
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
@@ -1126,6 +1156,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     return () => window.clearInterval(interval);
   }, [loadStudentUploadState, loadIncentiveState, loadOfficeHoursStatus]);
 
+  // Starts a timer for periodic updates and clears it during effect cleanup.
   useEffect(() => {
     if (!isCoolingDown && !earlyBonusWindowOpen && !isOfficeHoursExempt) return;
 
@@ -1136,54 +1167,19 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     return () => window.clearInterval(timer);
   }, [isCoolingDown, earlyBonusWindowOpen, isOfficeHoursExempt]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
-    if (isCoolingDown) {
-      setFiles([]);
-    } else {
-      setIsSkipConfirmationOpen(false);
-    }
+    if (!isCoolingDown) setIsSkipConfirmationOpen(false);
   }, [isCoolingDown]);
 
-  useEffect(() => {
-    const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
-    if (!token || !Number.isFinite(cid) || cid <= 0) {
-      setHideClassSelectionCrumb(false);
-      return;
-    }
-
-    axios
-      .get(`${import.meta.env.VITE_API_URL}/class/all?filter=true`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      .then((res) => {
-        const rows = Array.isArray(res.data)
-          ? (res.data as AssignedClassLite[])
-          : [];
-        const uniqueSchoolIds = new Set(
-          rows
-            .map((row) => Number(row.school_id))
-            .filter(
-              (rowSchoolId) => Number.isFinite(rowSchoolId) && rowSchoolId > 0,
-            ),
-        );
-
-        setHideClassSelectionCrumb(
-          rows.length === 1 &&
-          uniqueSchoolIds.size === 1 &&
-          Number(rows[0]?.id) === cid,
-        );
-      })
-      .catch(() => {
-        setHideClassSelectionCrumb(false);
-      });
-  }, [cid]);
-
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     getSubmissionDetails();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid, routeProjectId, moduleId]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     let cancelled = false;
     let previewUrl = "";
@@ -1201,7 +1197,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
 
     axios
       .get(
-        `${import.meta.env.VITE_API_URL}/projects/getAssignmentDescription`,
+        `${import.meta.env.VITE_API_URL}/assignment_materials/getAssignmentDescription`,
         {
           headers: authHeader(),
           params: {
@@ -1251,6 +1247,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     };
   }, [project_id, isCheckpoint, checkpointId]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     let cancelled = false;
     let previewUrl = "";
@@ -1274,7 +1271,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       : { project_id, preview: 1 };
 
     axios
-      .get(`${import.meta.env.VITE_API_URL}/projects/module_presentation`, {
+      .get(`${import.meta.env.VITE_API_URL}/assignment_materials/get_module_presentation`, {
         headers: authHeader(),
         params,
         responseType: "blob",
@@ -1324,16 +1321,19 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     modulePresentationFileName,
   ]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
-    setActiveSubmissionId(routeSubmissionId);
-  }, [routeSubmissionId, project_id, isCheckpoint, checkpointId]);
+    setActiveSubmissionId(null);
+  }, [project_id, isCheckpoint, checkpointId]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     if (activeSubmissionId !== null || previousSubmissionId === null) return;
 
     setActiveSubmissionId(submissionIdAsNumber(previousSubmissionId));
   }, [activeSubmissionId, previousSubmissionId]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     if (!initialSection || initialSectionAppliedRef.current) return;
 
@@ -1341,10 +1341,12 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     window.requestAnimationFrame(() => scrollToSection(initialSection));
   }, [initialSection, scrollToSection]);
 
+  // Registers browser listeners and cleans them up when this effect reruns or the component unmounts.
   useEffect(() => {
     if (!isAssignmentPreviewExpanded && !isPresentationPreviewExpanded) return;
 
     const originalOverflow = document.body.style.overflow;
+    // Closes expanded preview for this view.
     const closeExpandedPreview = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setIsAssignmentPreviewExpanded(false);
@@ -1360,6 +1362,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     };
   }, [isAssignmentPreviewExpanded, isPresentationPreviewExpanded]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     if (!Number.isFinite(cid) || cid <= 0 || project_id <= 0) {
       setPythonIdeEnabled(false);
@@ -1370,7 +1373,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     let cancelled = false;
 
     axios
-      .get(`${import.meta.env.VITE_API_URL}/upload/ide-context`, {
+      .get(`${import.meta.env.VITE_API_URL}/python_ide/python_ide_context`, {
         headers: authHeader(),
         params: {
           class_id: cid,
@@ -1404,6 +1407,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     };
   }, [cid, project_id, isCheckpoint, checkpointId]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     if (!project_id || project_id <= 0 || project_id === -1) {
       setPassedAllTests(false);
@@ -1431,35 +1435,22 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
 
     axios
       .get(
-        `${import.meta.env.VITE_API_URL}/submissions/testcaseerrors?class_id=${cid}&id=${encodeURIComponent(String(previousSubmissionId))}${qs}`,
+        `${import.meta.env.VITE_API_URL}/submissions/get_testcase_errors?class_id=${cid}&id=${encodeURIComponent(String(previousSubmissionId))}${qs}`,
         { headers: authHeader() },
       )
       .then((res) => {
         if (cancelled) return;
 
-        let payload: any = res?.data;
-
-        if (typeof payload === "string") {
-          try {
-            payload = JSON.parse(payload);
-          } catch {
-            payload = {};
-          }
-        }
-
+        const payload = res.data as { results?: { passed: boolean }[] };
         const results = Array.isArray(payload?.results) ? payload.results : [];
-        const passedCount = results.filter(isPassedTestcase).length;
+        const passedCount = results.reduce((count, result) => count + (isPassedValue(result.passed) ? 1 : 0), 0);
         const allPassed = results.length > 0 && passedCount === results.length;
 
         setTestcasesPassedCount(passedCount);
         setTestcasesTotalCount(results.length);
-        setPassedAllTests((current) => current || allPassed);
+        setPassedAllTests(allPassed);
         setCheckedPassedAll(true);
 
-        const payloadSubmissionId = getPayloadSubmissionId(payload);
-        if (payloadSubmissionId !== null) {
-          rememberPreviousSubmissionId(payloadSubmissionId);
-        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -1475,11 +1466,13 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previousSubmissionId, project_id, isCheckpoint, checkpointId, cid]);
 
+  // Loads or refreshes view data when the dependencies below change.
   useEffect(() => {
     fetchLatestSubmissionFromPastSubmissions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project_id, isCheckpoint, checkpointId, cid]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     if (passedAllTests) {
       setFiles([]);
@@ -1488,18 +1481,21 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     }
   }, [passedAllTests]);
 
+  // Synchronizes this component with the values listed in the dependency array.
   useEffect(() => {
     if (!isCheckpoint || !checkpointId || !project_id || project_id <= 0) {
       setCheckpointLabel("");
       return;
     }
 
+    const isCurrent = beginScopedRequest("checkpointLabel");
     axios
       .get(
-        `${import.meta.env.VITE_API_URL}/projects/list_checkpoints_student?project_id=${project_id}`,
+        `${import.meta.env.VITE_API_URL}/assignment_tracking/list_checkpoints_student?project_id=${project_id}`,
         { headers: authHeader() },
       )
       .then((res) => {
+        if (!isCurrent()) return;
         const probs = (res?.data?.problems ?? []) as CheckpointLite[];
         const found = Array.isArray(probs)
           ? probs.find((p) => Number(p?.id) === checkpointId)
@@ -1514,12 +1510,14 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
         setCheckpointLabel(`${left}: ${name}`);
       })
       .catch(() => {
+        if (!isCurrent()) return;
         setCheckpointLabel(
           `Checkpoint ${checkpointId}: Checkpoint ${checkpointId}`,
         );
       });
-  }, [isCheckpoint, checkpointId, project_id]);
+  }, [isCheckpoint, checkpointId, project_id, beginScopedRequest]);
 
+  // Handles file change for this view.
   function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     if (passedAllTests) {
       setFiles([]);
@@ -1561,7 +1559,9 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     setFiles(valid);
   }
 
+  // Returns submission details for this view.
   function getSubmissionDetails() {
+    const isCurrent = beginScopedRequest("submissionDetails");
     if (!Number.isFinite(cid) || cid <= 0) {
       setProject_name("");
       setProject_id(-1);
@@ -1575,85 +1575,46 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       loadModulePresentationStatus(routeProjectId);
 
       if (isAdminPreview) {
-        setDueDate("");
+
         return;
       }
 
       axios
         .get(
-          `${import.meta.env.VITE_API_URL}/submissions/GetSubmissionDetails?class_id=${cid}`,
+          `${import.meta.env.VITE_API_URL}/submissions/get_submission_details?class_id=${cid}`,
           {
             headers: authHeader(),
           },
         )
         .then((res) => {
+          if (!isCurrent()) return;
           const activeProjectId = Number(res.data?.[5] || 0);
 
           if (activeProjectId === routeProjectId) {
             setProject_name(res.data?.[3] || "");
-            setDueDate(res.data?.[4] || "");
+
             return;
           }
 
           setProject_name("");
-          setDueDate("");
+
         })
         .catch(() => {
+          if (!isCurrent()) return;
           setProject_name("");
-          setDueDate("");
+
         });
 
       return;
     }
 
-    axios
-      .get(
-        `${import.meta.env.VITE_API_URL}/submissions/GetSubmissionDetails?class_id=${cid}`,
-        {
-          headers: authHeader(),
-        },
-      )
-      .then((res) => {
-        const activeProjectId = Number(res.data[5] || 0);
-        setProject_name(res.data[3]);
-        setDueDate(res.data[4]);
-        setProject_id(activeProjectId);
-        loadModulePresentationStatus(activeProjectId);
-      })
-      .catch(() => {
-        setProject_name("");
-        setProject_id(-1);
-        setHasModulePresentation(false);
-        setModulePresentationFileName("");
-      });
+    setProject_name("");
+    setProject_id(-1);
+    setHasModulePresentation(false);
+    setModulePresentationFileName("");
   }
 
-  function submitSuggestions() {
-    if (isAdminPreview) {
-      alert("Feedback submission is disabled in admin preview.");
-      return;
-    }
-
-    axios
-      .post(
-        `${import.meta.env.VITE_API_URL}/submissions/submit_suggestion`,
-        { suggestion: suggestions },
-        { headers: authHeader() },
-      )
-      .then(
-        () => {
-          alert(
-            "Thank you for your constructive feedback. If you have any other suggestions, please submit them.",
-          );
-        },
-        () => {
-          alert(
-            "There was an error submitting your feedback. Please try again later.",
-          );
-        },
-      );
-  }
-
+  // Runs the selected Python program and displays its output or input prompt.
   async function runPythonProgram(
     runRequest: PythonIdeRunRequest,
   ): Promise<PythonIdeRunResult> {
@@ -1661,8 +1622,9 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       throw new Error("The Python IDE is not available for this assignment.");
     }
 
+    // Sends this operation and its payload to the server.
     const response = await axios.post(
-      `${import.meta.env.VITE_API_URL}/upload/run-python`,
+      `${import.meta.env.VITE_API_URL}/python_ide/run_python_from_ide`,
       {
         class_id: cid,
         project_id,
@@ -1677,14 +1639,10 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     return response.data as PythonIdeRunResult;
   }
 
+  // Handles submit for this view.
   function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
-
-    if (isAdminPreview) {
-      setError_Message("Program submission is disabled in admin student preview.");
-      setIsErrorMessageHidden(false);
-      return;
-    }
+    if (submitInFlightRef.current) return;
 
     if (passedAllTests) return;
 
@@ -1720,7 +1678,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
 
     if (
       submissionMethod === "editor" &&
-      (!editorFilename || !editorFilename.toLowerCase().endsWith(".py"))
+      (!/^[^\\/:*?"<>|]+\.py$/i.test(editorFilename))
     ) {
       setError_Message("The Python program file name must end in .py.");
       setIsErrorMessageHidden(false);
@@ -1758,6 +1716,8 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       return;
     }
 
+    const isCurrent = beginScopedRequest("submit");
+    submitInFlightRef.current = true;
     setIsErrorMessageHidden(true);
     setIsLoading(true);
 
@@ -1776,7 +1736,8 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       if (!checkpointId) {
         setError_Message("Missing checkpoint id.");
         setIsErrorMessageHidden(false);
-        setIsLoading(false);
+        submitInFlightRef.current = false;
+          setIsLoading(false);
         return;
       }
 
@@ -1785,10 +1746,14 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     }
 
     axios
-      .post(`${import.meta.env.VITE_API_URL}/upload/`, formData, {
+      .post(`${import.meta.env.VITE_API_URL}/upload/file_upload`, formData, {
         headers: authHeader(),
       })
       .then((res) => {
+        if (!isCurrent()) return;
+        for (const channel of ["uploadState", "incentives", "pastSubmissions"]) {
+          requestSequenceRef.current.set(channel, (requestSequenceRef.current.get(channel) || 0) + 1);
+        }
         startSubmissionCooldown(Number(res?.data?.cooldown_seconds ?? 0));
         setIncentives((previous) => ({
           ...(previous || {}),
@@ -1810,19 +1775,22 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
             res?.data?.office_hours_cooldown_exempt_until ?? null,
         }));
 
-        const sid = getPayloadSubmissionId(res?.data);
+        const sid = normalizePositiveSubmissionId(res.data.sid);
 
         if (sid !== null) {
           rememberPreviousSubmissionId(sid);
           setFiles([]);
           setCheckedPassedAll(false);
+          submitInFlightRef.current = false;
           setIsLoading(false);
           showSubmissionResults(sid);
           return;
         }
 
         fetchLatestSubmissionFromPastSubmissions().then((latestSubmission) => {
+          if (!isCurrent()) return;
           setFiles([]);
+          submitInFlightRef.current = false;
           setIsLoading(false);
 
           if (latestSubmission !== null) {
@@ -1837,6 +1805,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
         });
       })
       .catch((err) => {
+        if (!isCurrent()) return;
         const retryAfterSeconds = Number(
           err.response?.data?.retry_after_seconds ?? err.response?.headers?.["retry-after"],
         );
@@ -1865,25 +1834,30 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
 
         setError_Message(err.response?.data?.message || "Upload failed.");
         setIsErrorMessageHidden(false);
-        setIsLoading(false);
+        submitInFlightRef.current = false;
+          setIsLoading(false);
       });
   }
 
   const CODE_ICON_RE = /\.(py|java|c|h|rkt|scm|cpp)$/i;
   const TEXT_ICON_RE = /\.(txt|md|pdf|doc|docx)$/i;
 
+  // Returns file icon for this view.
   const getFileIcon = (filename: string) => {
     if (CODE_ICON_RE.test(filename))
       return <FaCode className="file-language-icon" aria-hidden="true" />;
     if (TEXT_ICON_RE.test(filename)) {
+      // Renders the interface using the current data and interaction state.
       return (
         <FaAlignJustify className="file-language-icon" aria-hidden="true" />
       );
     }
 
+    // Renders the interface using the current data and interaction state.
     return <FaTimesCircle className="file-language-icon" aria-hidden="true" />;
   };
 
+  // Recomputes page title only when its dependencies change.
   const pageTitle = useMemo(() => {
     if (isCheckpoint) {
       return (
@@ -1900,6 +1874,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     return "";
   }, [isCheckpoint, checkpointLabel, checkpointId, project_name, moduleName]);
 
+  // Recomputes breadcrumbs items only when its dependencies change.
   const breadcrumbsItems = useMemo(() => {
     const titleLabel =
       pageTitle || (isCheckpoint ? "Checkpoint Upload" : "Project Upload");
@@ -1937,33 +1912,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
       ];
     }
 
-    if (isCheckpoint) {
-      return hideClassSelectionCrumb
-        ? [
-          { label: "Project Upload", to: `/student/${class_id}/upload` },
-          {
-            label: "Checkpoint Select",
-            to: `/student/${class_id}/checkpoint`,
-          },
-          { label: titleLabel },
-        ]
-        : [
-          { label: "Class Selection", to: "/student/classes" },
-          { label: "Project Upload", to: `/student/${class_id}/upload` },
-          {
-            label: "Checkpoint Select",
-            to: `/student/${class_id}/checkpoint`,
-          },
-          { label: titleLabel },
-        ];
-    }
-
-    return hideClassSelectionCrumb
-      ? [{ label: titleLabel }]
-      : [
-        { label: "Class Selection", to: "/student/classes" },
-        { label: titleLabel },
-      ];
+    return [{ label: "School Selection", to: "/schools" }, { label: titleLabel }];
   }, [
     pageTitle,
     hasModuleRoute,
@@ -1971,8 +1920,6 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     moduleId,
     cid,
     isCheckpoint,
-    hideClassSelectionCrumb,
-    class_id,
     isAdminPreview,
     adminPreviewBasePath,
   ]);
@@ -1998,34 +1945,33 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
     },
   ];
 
+  // Renders the interface using the current data and interaction state.
   return (
     <div className="student-upload-page">
+      {/* Shows progress while this view is waiting for data. */}
       <LoadingAnimation
         show={isLoading}
         message={submissionMethod === "editor" ? "Submitting..." : "Uploading..."}
       />
 
+      {/* Sets the page title and document metadata. */}
       <Helmet>
         <title>MAAT</title>
       </Helmet>
 
+      {/* Displays the navigation and actions available on this page. */}
       <MenuComponent
-        showAdminUpload={false}
-        showUpload={false}
-        showHelp={false}
-        showCreate={false}
-        showLast={true}
-        showReviewButton={false}
       />
 
+      {/* Shows the current location and links back to parent pages. */}
       <DirectoryBreadcrumbs items={breadcrumbsItems} />
 
       <div className="pageTitle">Student Upload</div>
 
       {isAdminPreview ? (
         <div className="pageMessage" role="status">
-          Admin preview: this assignment is read-only. You can inspect instructions,
-          use the program workspace, and review the layout, but you cannot submit.
+          Admin preview: submit as the Test User to demonstrate cooldowns and submission feedback.
+          Any enabled assignment can be tested without completing earlier checkpoints.
         </div>
       ) : null}
 
@@ -2128,6 +2074,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
               {workspaceViews.map((view, viewIndex) => {
                 const isActive = activeWorkspaceSection === view.id;
 
+                // Renders the interface using the current data and interaction state.
                 return (
                   <li
                     key={view.id}
@@ -2780,9 +2727,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
                         )}
                       </span>
                       <span>
-                        {isAdminPreview
-                          ? "Submission Disabled in Preview"
-                          : isCooldownStateLoading
+                        {isCooldownStateLoading
                             ? "Checking Cooldown"
                             : isCoolingDown
                               ? "Cooling Down"
@@ -2873,6 +2818,7 @@ const StudentUpload = ({ initialSection }: StudentUploadProps = {}) => {
                             (isLast && nextAttemptNumber >= item.attempt)
                           );
 
+                        // Renders the interface using the current data and interaction state.
                         return (
                           <li
                             className={[

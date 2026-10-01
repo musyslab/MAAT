@@ -1,3 +1,4 @@
+// PlagiarismModal.tsx: Displays similarity results and highlighted comparisons between submissions.
 // Install at frontend/src/pages/components/PlagiarismModal.tsx.
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -5,17 +6,28 @@ import axios from 'axios'
 import { diffChars, diffLines } from 'diff'
 import '../../styling/PlagiarismModal.scss'
 
+// Describes the source data expected by this file.
 type Source = { name: string; content: string }
+// Describes the submission data expected by this file.
 type Submission = { id: number; user_id: number; name: string; files: Source[]; warnings: string[]; token_count: number; ast_available: boolean }
+// Describes the pair data expected by this file.
 type Pair = { left_id: number; right_id: number; overall: number | null; scores: { tokens: number | null; ast: number | null; dependency: number | null }; evidence: string }
+// Describes the report data expected by this file.
 type Report = { notice: string; methodology: string; analyzed_count: number; submitted_count: number; pair_count: number; returned_count: number; elapsed_seconds: number; rename_identifiers: boolean; starter_excluded: boolean; submissions: Submission[]; pairs: Pair[]; skipped: { id: number; name: string; reason: string }[] }
+// Describes the props data expected by this file.
 type Props = { projectId: number; classId: number; checkpoint: boolean; checkpointId?: number; studentIds: number[]; onClose: () => void }
+// Describes the segment data expected by this file.
 type Segment = { text: string; changed: boolean }
+// Describes the cell data expected by this file.
 type Cell = { text: string; line: number; segments?: Segment[] }
+// Describes the diff row data expected by this file.
 type DiffRow = { left?: Cell; right?: Cell; kind: 'same' | 'changed' | 'left-only' | 'right-only' }
+// Helper for percent used by this component.
 const percent = (score: number | null) => score === null ? 'N/A' : `${score.toFixed(1)}%`
+// Helper for split lines used by this component.
 const splitLines = (value: string) => value ? value.replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n') : []
 
+// Helper for rows for diff used by this component.
 function rowsForDiff(left: string, right: string): { rows: DiffRow[]; fallback: boolean } {
     const rows: DiffRow[] = []
     const a = splitLines(left), b = splitLines(right)
@@ -23,6 +35,7 @@ function rowsForDiff(left: string, right: string): { rows: DiffRow[]; fallback: 
     const normalize = (lines: string[]) => lines.length ? lines.join('\n') + '\n' : ''
     const changes = diffLines(normalize(a), normalize(b), { timeout: 400 })
     const inlineDeadline = Date.now() + 150
+    // Helper for append used by this component.
     const append = (left?: Cell, right?: Cell) => {
         const kind = !left ? 'right-only' : !right ? 'left-only' : left.text === right.text ? 'same' : 'changed'
         if (kind === 'changed' && left && right && Date.now() < inlineDeadline && left.text.length + right.text.length <= 10000) {
@@ -65,12 +78,17 @@ function rowsForDiff(left: string, right: string): { rows: DiffRow[]; fallback: 
 
 // Shared bands keep the ranked table and comparison statistics consistent.
 const scoreBand = (score: number | null) => score === null ? 'unavailable' : score >= 80 ? 'high' : score >= 60 ? 'moderate' : 'low'
+// Helper for score label used by this component.
 const scoreLabel = (score: number | null) => score === null ? 'Unavailable' : `${scoreBand(score)} similarity`
+// Renders the score interface and coordinates its local data and interactions.
 function Score({ value }: { value: number | null }) {
+    // Renders the interface using the current data and interaction state.
     return <span className={`plag-score plag-score-${scoreBand(value)}`} title={scoreLabel(value)}>{percent(value)}</span>
 }
 
+// Renders the stats interface and coordinates its local data and interactions.
 function Stats({ pair }: { pair: Pair }) {
+    // Renders the interface using the current data and interaction state.
     return <dl className="plag-stats">
         <div className={`plag-stat plag-score-${scoreBand(pair.overall)}`}><dt>Overall similarity</dt><dd>{percent(pair.overall)}</dd></div>
         <div className={`plag-stat plag-score-${scoreBand(pair.scores.tokens)}`}><dt>Tokens · 40%</dt><dd>{percent(pair.scores.tokens)}</dd></div>
@@ -79,17 +97,23 @@ function Stats({ pair }: { pair: Pair }) {
     </dl>
 }
 
+// Renders the comparison interface and coordinates its local data and interactions.
 function Comparison({ pair, left, right }: { pair: Pair; left: Submission; right: Submission }) {
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [leftFile, setLeftFile] = useState(0)
     const [rightFile, setRightFile] = useState(0)
     const [activeChange, setActiveChange] = useState(-1)
+    // Keeps grid available across renders without triggering a state update.
     const grid = useRef<HTMLDivElement>(null)
     const a = left.files[leftFile], b = right.files[rightFile]
+    // Recomputes { rows, fallback } only when its dependencies change.
     const { rows, fallback } = useMemo(() => rowsForDiff(a?.content || '', b?.content || ''), [a, b])
+    // Recomputes change starts only when its dependencies change.
     const changeStarts = useMemo(() => rows.reduce<number[]>((starts, row, i) => {
         if (row.kind !== 'same' && (i === 0 || rows[i - 1].kind === 'same')) starts.push(i)
         return starts
     }, []), [rows])
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         if (activeChange < 0) return
         grid.current?.querySelectorAll<HTMLElement>('.plag-code-scroll').forEach(pane => {
@@ -97,6 +121,7 @@ function Comparison({ pair, left, right }: { pair: Pair; left: Submission; right
             if (row) pane.scrollTop += row.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientHeight / 3
         })
     }, [activeChange, changeStarts])
+    // Helper for move change used by this component.
     const moveChange = (direction: number) => {
         if (!changeStarts.length) return
         setActiveChange(current => current < 0 ? (direction > 0 ? 0 : changeStarts.length - 1)
@@ -104,6 +129,7 @@ function Comparison({ pair, left, right }: { pair: Pair; left: Submission; right
     }
     const labels = { same: 'Identical text', changed: 'Changed text', 'left-only': 'Left only', 'right-only': 'Right only' }
     const symbols = { same: '=', changed: '~', 'left-only': '−', 'right-only': '+' }
+    // Renders the interface using the current data and interaction state.
     return <>
         <h3>{left.name} ↔ {right.name}</h3>
         <Stats pair={pair} />
@@ -135,6 +161,7 @@ function Comparison({ pair, left, right }: { pair: Pair; left: Submission; right
                     <tbody>{rows.map((row, index) => {
                         const cell = row[side]
                         const selected = activeChange >= 0 && index === changeStarts[activeChange]
+                        // Renders the interface using the current data and interaction state.
                         return <tr key={index} data-row={index} data-line={cell?.line} className={`${cell ? `plag-text-${row.kind}` : 'plag-placeholder'} ${selected ? 'plag-selected-change' : ''}`}>
                             <td className="plag-line-number">{cell?.line ?? ''}</td>
                             <td title={cell ? labels[row.kind] : 'No corresponding line'}><div className="plag-code-line">
@@ -151,20 +178,28 @@ function Comparison({ pair, left, right }: { pair: Pair; left: Submission; right
     </>
 }
 
+// Displays similarity results and highlighted comparisons between submissions.
 export default function PlagiarismModal(props: Props) {
     const { onClose } = props
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [report, setReport] = useState<Report | null>(null)
     const [busy, setBusy] = useState(true)
     const [error, setError] = useState('')
     const [selected, setSelected] = useState<Pair | null>(null)
     const [minimum, setMinimum] = useState(0)
+    // Keeps dialog available across renders without triggering a state update.
     const dialog = useRef<HTMLDialogElement>(null)
+    // Keeps request ref available across renders without triggering a state update.
     const requestRef = useRef<AbortController | null>(null)
+    // Keeps sequence available across renders without triggering a state update.
     const sequence = useRef(0)
+    // Keeps initial props available across renders without triggering a state update.
     const initialProps = useRef(props)
+    // Keeps close ref available across renders without triggering a state update.
     const closeRef = useRef(onClose)
     closeRef.current = onClose
 
+    // Helper for run used by this component.
     async function run() {
         requestRef.current?.abort()
         const controller = new AbortController()
@@ -173,7 +208,8 @@ export default function PlagiarismModal(props: Props) {
         setBusy(true); setError(''); setSelected(null); setReport(null)
         const p = initialProps.current
         try {
-            const response = await axios.post<Report>(`${import.meta.env.VITE_API_URL}/projects/run-plagiarism`, {
+            // Sends this operation and its payload to the server.
+            const response = await axios.post<Report>(`${import.meta.env.VITE_API_URL}/plagiarism/run_plagiarism`, {
                 project_id: p.projectId, class_id: p.classId, checkpoint: p.checkpoint,
                 checkpoint_id: p.checkpoint ? p.checkpointId : undefined,
                 student_ids: p.studentIds, rename_identifiers: true,
@@ -188,6 +224,7 @@ export default function PlagiarismModal(props: Props) {
         }
     }
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         const previousFocus = document.activeElement as HTMLElement | null
         const overflow = document.body.style.overflow
@@ -204,8 +241,10 @@ export default function PlagiarismModal(props: Props) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
+    // Recomputes by id only when its dependencies change.
     const byId = useMemo(() => new Map(report?.submissions.map(s => [s.id, s]) || []), [report])
     const pairs = report?.pairs.filter(p => p.overall === null ? minimum === 0 : p.overall >= minimum) || []
+    // Renders the interface using the current data and interaction state.
     return createPortal(<dialog className="plag-modal" ref={dialog} aria-labelledby="plag-title" onCancel={e => { e.preventDefault(); closeRef.current() }}>
         <header><h2 id="plag-title">Python similarity screening</h2><button type="button" autoFocus onClick={onClose} aria-label="Close plagiarism screening">Close</button></header>
         <p className="plag-notice">Similarity helps identify submissions to review; it is not proof of plagiarism.</p>

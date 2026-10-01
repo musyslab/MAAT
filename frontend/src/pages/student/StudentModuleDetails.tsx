@@ -1,3 +1,4 @@
+// StudentModuleDetails.tsx: Displays project and checkpoint progress, rewards, availability, and office-hours actions.
 import {
     CSSProperties,
     KeyboardEvent,
@@ -32,6 +33,7 @@ import StarSpendingInfo from "../components/StarSpendingInfo";
 import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs";
 import "../../styling/StudentModuleDetails.scss";
 
+// Describes the module object data expected by this file.
 interface ModuleObject {
     Id: number;
     ClassId: number;
@@ -50,6 +52,7 @@ interface ModuleObject {
     MainStartedEarly?: boolean;
 }
 
+// Describes the class access response data expected by this file.
 interface ClassAccessResponse {
     id?: number;
     name?: string;
@@ -57,6 +60,7 @@ interface ClassAccessResponse {
     school_name?: string;
 }
 
+// Describes the checkpoint data expected by this file.
 interface Checkpoint {
     id: number;
     number: number;
@@ -70,6 +74,7 @@ interface Checkpoint {
     startedEarly?: boolean;
 }
 
+// Describes the incentive summary data expected by this file.
 interface IncentiveSummary {
     stars?: number;
     star_balance?: number;
@@ -80,6 +85,7 @@ interface IncentiveSummary {
     cooldown_skip_cost?: number;
 }
 
+// Describes the office hours status data expected by this file.
 interface OfficeHoursStatus {
     status: "not_queued" | "waiting" | "being_helped";
     in_queue: boolean;
@@ -99,18 +105,21 @@ interface OfficeHoursStatus {
     help_remaining_seconds?: number;
 }
 
+// Describes the path segment data expected by this file.
 interface PathSegment {
     key: string;
     d: string;
     completed: boolean;
 }
 
+// Describes the path svg state data expected by this file.
 interface PathSvgState {
     width: number;
     height: number;
     segments: PathSegment[];
 }
 
+// Describes the reward math data expected by this file.
 interface RewardMath {
     baseStars: number;
     multiplier: number;
@@ -120,11 +129,15 @@ interface RewardMath {
     startedEarly: boolean;
 }
 
+// Builds the authorization header used by authenticated API requests.
 const authHeader = () => ({
+  ...(window.location.pathname.includes("/student-preview") ? { "X-MAAT-Test-User": "1" } : {}),
     Authorization: `Bearer ${localStorage.getItem("AUTOTA_AUTH_TOKEN")}`,
 });
 
+// Displays project and checkpoint progress, rewards, availability, and office-hours actions.
 export default function StudentModuleDetails() {
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id, class_id, module_id } = useParams<{
         school_id: string;
         class_id: string;
@@ -140,6 +153,7 @@ export default function StudentModuleDetails() {
     const isAdminPreview = location.pathname.includes("/student-preview");
     const adminPreviewBasePath = `/admin/school/${schoolId}/class/${classId}/student-preview`;
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [className, setClassName] = useState("");
     const [module, setModule] = useState<ModuleObject | null>(null);
     const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
@@ -163,6 +177,7 @@ export default function StudentModuleDetails() {
     const [isOfficeHoursBusy, setIsOfficeHoursBusy] = useState(false);
     const [officeHoursError, setOfficeHoursError] = useState("");
 
+    // Keeps module path track ref available across renders without triggering a state update.
     const modulePathTrackRef = useRef<HTMLDivElement | null>(null);
 
     const mainProjectId = module?.MainProjectId || 0;
@@ -190,19 +205,23 @@ export default function StudentModuleDetails() {
         ? Math.max(0, Math.ceil((officeHoursExpiresMs - nowMs) / 1000))
         : Math.max(0, Number(officeHoursStatus?.help_remaining_seconds || 0));
 
+    // Helper for checkpoint is complete used by this component.
     const checkpointIsComplete = (problem: Checkpoint): boolean => {
         return Boolean(problem.solved || problem.skipped);
     };
 
+    // Returns checkpoint reward stars for this view.
     const getCheckpointRewardStars = (problem: Checkpoint): number => {
         return Math.max(0, Number(problem.rewardStars ?? (problem.rewarded ? checkpointRewardBase : 0)));
     };
 
+    // Parses date for this view.
     const parseDate = (value: string): Date | null => {
         const d = new Date(value);
         return Number.isNaN(d.getTime()) ? null : d;
     };
 
+    // Formats date object12h for this view.
     const formatDateObject12h = (d: Date): string => {
         return new Intl.DateTimeFormat("en-US", {
             year: "numeric",
@@ -215,6 +234,7 @@ export default function StudentModuleDetails() {
         }).format(d);
     };
 
+    // Formats date12h for this view.
     const formatDate12h = (value: string): string => {
         const d = parseDate(value);
         if (!d) return value;
@@ -222,15 +242,18 @@ export default function StudentModuleDetails() {
         return formatDateObject12h(d);
     };
 
+    // Formats star value for this view.
     const formatStarValue = (value: number): string => {
         if (!Number.isFinite(value)) return "0";
         return Number.isInteger(value) ? `${value}` : value.toFixed(1);
     };
 
+    // Formats star count for this view.
     const formatStarCount = (value: number): string => {
         return `${formatStarValue(value)} ${value === 1 ? "star" : "stars"}`;
     };
 
+    // Formats countdown for this view.
     const formatCountdown = (seconds: number): string => {
         const safeSeconds = Math.max(0, Math.ceil(seconds));
         const days = Math.floor(safeSeconds / 86400);
@@ -249,6 +272,7 @@ export default function StudentModuleDetails() {
         return `${minutes}m ${secs}s`;
     };
 
+    // Calculates the cutoff used to determine early-start availability.
     const getEarlyStartCutoffDate = (currentModule: ModuleObject): Date | null => {
         const start = parseDate(currentModule.Start);
         const end = parseDate(currentModule.End);
@@ -260,6 +284,7 @@ export default function StudentModuleDetails() {
         return new Date(start.getTime() + (end.getTime() - start.getTime()) / 2);
     };
 
+    // Returns module status for this view.
     const getModuleStatus = (
         currentModule: ModuleObject,
     ): "active" | "upcoming" | "ended" => {
@@ -274,6 +299,7 @@ export default function StudentModuleDetails() {
 
     const statusLabel = module ? getModuleStatus(module) : "upcoming";
 
+    // Recomputes early start cutoff date only when its dependencies change.
     const earlyStartCutoffDate = useMemo(() => {
         return module ? getEarlyStartCutoffDate(module) : null;
     }, [module]);
@@ -299,6 +325,7 @@ export default function StudentModuleDetails() {
             : `Doubling stopped after ${earlyStartDeadlineLabel}.`
         : "Early bonus timing could not be calculated.";
 
+    // Recomputes sorted checkpoints only when its dependencies change.
     const sortedCheckpoints = useMemo(() => {
         return [...checkpoints].sort((a, b) => {
             if (a.number !== b.number) return a.number - b.number;
@@ -329,6 +356,7 @@ export default function StudentModuleDetails() {
         (completedAssignmentCount / totalAssignmentCount) * 100,
     );
 
+    // Calculates the reward values displayed for the current assignment.
     const getRewardMath = (
         baseStars: number,
         rewarded: boolean,
@@ -384,11 +412,13 @@ export default function StudentModuleDetails() {
         };
     };
 
+    // Renders reward math for this view.
     const renderRewardMath = (
         rewardMath: RewardMath,
         rewardState: "earned" | "possible" | "skipped",
     ) => {
         if (rewardMath.skipped || rewardState === "skipped") {
+            // Renders the interface using the current data and interaction state.
             return (
                 <div className="module-path-node-reward is-muted" aria-label="No reward because this checkpoint was skipped">
                     <FaStar aria-hidden="true" />
@@ -403,6 +433,7 @@ export default function StudentModuleDetails() {
             ? `${rewardMath.multiplier}x locked in`
             : `${rewardMath.multiplier}x early bonus`;
 
+        // Renders the interface using the current data and interaction state.
         return (
             <div
                 className={[
@@ -449,6 +480,7 @@ export default function StudentModuleDetails() {
         );
     };
 
+    // Recomputes path completion states only when its dependencies change.
     const pathCompletionStates = useMemo(() => {
         return [
             ...sortedCheckpoints.map((problem) => checkpointIsComplete(problem)),
@@ -465,6 +497,7 @@ export default function StudentModuleDetails() {
         Boolean(module?.MainStartedEarly),
     );
 
+    // Keeps the recalculate path connectors callback stable until its dependencies change.
     const recalculatePathConnectors = useCallback(() => {
         const trackElement = modulePathTrackRef.current;
 
@@ -543,6 +576,7 @@ export default function StudentModuleDetails() {
         });
     }, [pathCompletionStates]);
 
+    // Loads class name for this view.
     const loadClassName = () => {
         if (!classId) {
             setClassName("");
@@ -551,7 +585,7 @@ export default function StudentModuleDetails() {
 
         axios
             .get<ClassAccessResponse>(
-                `${import.meta.env.VITE_API_URL}/class/id/${classId}/access`,
+                `${import.meta.env.VITE_API_URL}/classes/validate_class_access/${classId}`,
                 {
                     headers: authHeader(),
                     params: {
@@ -569,6 +603,7 @@ export default function StudentModuleDetails() {
             });
     };
 
+    // Loads module details for this view.
     const loadModuleDetails = () => {
         if (!classId || !moduleId) {
             setErrorMessage("Could not find this module.");
@@ -581,7 +616,7 @@ export default function StudentModuleDetails() {
 
         axios
             .get(
-                `${import.meta.env.VITE_API_URL}/projects/get_module_overview_student?module_id=${moduleId}`,
+                `${import.meta.env.VITE_API_URL}/assignment_tracking/get_module_overview_student?module_id=${moduleId}`,
                 {
                     headers: authHeader(),
                 },
@@ -598,36 +633,9 @@ export default function StudentModuleDetails() {
                     return;
                 }
 
-                if (isAdminPreview) {
-                    setModule({
-                        ...selectedModule,
-                        MainCompleted: false,
-                        MainRewarded: false,
-                        MainRewardStars: 0,
-                        MainRewardMultiplier: 1,
-                        MainStartedEarly: false,
-                    });
-                    setCheckpoints(
-                        (res.data?.checkpoints || []).map((checkpoint: Checkpoint) => ({
-                            ...checkpoint,
-                            solved: false,
-                            rewarded: false,
-                            skipped: false,
-                            rewardStars: 0,
-                            rewardMultiplier: 1,
-                            startedEarly: false,
-                        })),
-                    );
-                    setIncentives({
-                        ...(res.data?.incentives || {}),
-                        stars: 0,
-                        star_balance: 0,
-                    });
-                } else {
-                    setModule(selectedModule);
-                    setCheckpoints(res.data?.checkpoints || []);
-                    setIncentives(res.data?.incentives || null);
-                }
+                setModule(selectedModule);
+                setCheckpoints(res.data?.checkpoints || []);
+                setIncentives(res.data?.incentives || null);
                 setIsLoading(false);
             })
             .catch((err) => {
@@ -640,12 +648,14 @@ export default function StudentModuleDetails() {
             });
     };
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         loadClassName();
         loadModuleDetails();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [schoolId, classId, moduleId, isAdminPreview]);
 
+    // Keeps the load office hours status callback stable until its dependencies change.
     const loadOfficeHoursStatus = useCallback((showLoading = false) => {
         if (isAdminPreview) {
             setOfficeHoursStatus(null);
@@ -662,7 +672,7 @@ export default function StudentModuleDetails() {
 
         if (showLoading) setIsOfficeHoursLoading(true);
         axios
-            .get(`${import.meta.env.VITE_API_URL}/submissions/office-hours/status`, {
+            .get(`${import.meta.env.VITE_API_URL}/office_hours/office_hours_student_status`, {
                 headers: authHeader(),
                 params: {
                     class_id: Number(classId),
@@ -684,10 +694,12 @@ export default function StudentModuleDetails() {
             });
     }, [classId, moduleId, isAdminPreview]);
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         loadOfficeHoursStatus(true);
     }, [loadOfficeHoursStatus]);
 
+    // Starts a timer for periodic updates and clears it during effect cleanup.
     useEffect(() => {
         const timer = window.setInterval(() => {
             setNowMs(Date.now());
@@ -731,14 +743,7 @@ export default function StudentModuleDetails() {
         module?.Id,
     ]);
 
-    const goBackToModules = () => {
-        navigate(
-            isAdminPreview
-                ? adminPreviewBasePath
-                : `/student/school/${schoolId}/class/${classId}/modules`,
-        );
-    };
-
+    // Opens checkpoint for this view.
     const openCheckpoint = (checkpointId: number) => {
         if (!mainProjectId) return;
 
@@ -749,6 +754,7 @@ export default function StudentModuleDetails() {
         );
     };
 
+    // Opens main project for this view.
     const openMainProject = () => {
         if (!mainProjectId || (!allCheckpointSolved && !isAdminPreview)) return;
 
@@ -759,6 +765,7 @@ export default function StudentModuleDetails() {
         );
     };
 
+    // Handles checkpoint key down for this view.
     const handleCheckpointKeyDown = (
         event: KeyboardEvent<HTMLElement>,
         checkpointId: number,
@@ -770,6 +777,7 @@ export default function StudentModuleDetails() {
         openCheckpoint(checkpointId);
     };
 
+    // Skips checkpoint for this view.
     const skipCheckpoint = (checkpointId: number) => {
         if (isAdminPreview) return;
         if (!mainProjectId || !classId || !moduleId || skipBusyCheckpointId !== null) return;
@@ -780,7 +788,7 @@ export default function StudentModuleDetails() {
 
         axios
             .post(
-                `${import.meta.env.VITE_API_URL}/projects/skip_checkpoint`,
+                `${import.meta.env.VITE_API_URL}/assignment_tracking/skip_checkpoint`,
                 {
                     class_id: Number(classId),
                     project_id: mainProjectId,
@@ -805,6 +813,7 @@ export default function StudentModuleDetails() {
             });
     };
 
+    // Helper for join office hours queue used by this component.
     const joinOfficeHoursQueue = () => {
         if (isAdminPreview) return;
         if (!classId || !moduleId || isOfficeHoursBusy) return;
@@ -813,7 +822,7 @@ export default function StudentModuleDetails() {
 
         axios
             .post(
-                `${import.meta.env.VITE_API_URL}/submissions/office-hours/queue`,
+                `${import.meta.env.VITE_API_URL}/office_hours/office_hours_queue`,
                 {
                     class_id: Number(classId),
                     module_id: moduleId,
@@ -833,6 +842,7 @@ export default function StudentModuleDetails() {
             .finally(() => setIsOfficeHoursBusy(false));
     };
 
+    // Helper for leave office hours queue used by this component.
     const leaveOfficeHoursQueue = () => {
         if (isAdminPreview) return;
         if (!classId || !moduleId || isOfficeHoursBusy) return;
@@ -841,7 +851,7 @@ export default function StudentModuleDetails() {
 
         axios
             .delete(
-                `${import.meta.env.VITE_API_URL}/submissions/office-hours/queue`,
+                `${import.meta.env.VITE_API_URL}/office_hours/office_hours_queue`,
                 {
                     headers: authHeader(),
                     data: {
@@ -860,21 +870,19 @@ export default function StudentModuleDetails() {
             .finally(() => setIsOfficeHoursBusy(false));
     };
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div className="student-module-details-page">
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>MAAT</title>
             </Helmet>
 
+            {/* Displays the navigation and actions available on this page. */}
             <MenuComponent
-                showUpload={!isAdminPreview}
-                showAdminUpload={false}
-                showHelp={false}
-                showCreate={false}
-                showLast={false}
-                showReviewButton={false}
             />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={isAdminPreview
                     ? [
@@ -914,8 +922,8 @@ export default function StudentModuleDetails() {
 
             {isAdminPreview ? (
                 <div className="module-details-message" role="status">
-                    Admin preview: progress is shown as a new student. Locked assignments can still be opened
-                    for review, but submissions and student-only actions are disabled.
+                    Admin preview: progress belongs to the Test User. Locked assignments can still be opened
+                    and submitted to without completing earlier checkpoints.
                 </div>
             ) : null}
 
@@ -1077,6 +1085,7 @@ export default function StudentModuleDetails() {
                                         Boolean(problem.startedEarly),
                                     );
 
+                                    // Renders the interface using the current data and interaction state.
                                     return (
                                         <article
                                             className={[

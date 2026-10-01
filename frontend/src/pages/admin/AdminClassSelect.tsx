@@ -1,3 +1,4 @@
+// AdminClassSelect.tsx: Renders the admin class select interface and coordinates its local data and interactions.
 import { Component, KeyboardEvent } from 'react'
 import axios from 'axios'
 import { Link, NavigateFunction, useNavigate, useParams } from 'react-router-dom'
@@ -6,16 +7,19 @@ import MenuComponent from '../components/MenuComponent'
 import '../../styling/Selection.scss'
 import DirectoryBreadcrumbs from "../components/DirectoryBreadcrumbs"
 
+// Describes the class object data expected by this file.
 interface ClassObject {
     Id: number
     Name: string
 }
 
+// Describes the school object data expected by this file.
 interface SchoolObject {
     Id: number
     Name: string
 }
 
+// Describes the class list response data expected by this file.
 interface ClassListResponse {
     school?: {
         id: number
@@ -27,6 +31,7 @@ interface ClassListResponse {
     }>
 }
 
+// Describes the class state data expected by this file.
 interface ClassState {
     classes: Array<ClassObject>
     selectedSchoolId: number
@@ -35,6 +40,7 @@ interface ClassState {
     isLoading: boolean
 }
 
+// Describes the admin class select props data expected by this file.
 interface AdminClassSelectProps {
     schoolIdFromUrl: string
     navigate: NavigateFunction
@@ -82,7 +88,7 @@ class AdminClassSelectInner extends Component<AdminClassSelectProps, ClassState>
         })
 
         axios
-            .get(import.meta.env.VITE_API_URL + `/class/all?school_id=${schoolId}&include_school=true`, {
+            .get(import.meta.env.VITE_API_URL + `/classes/get_classes_and_ids?school_id=${schoolId}&include_school=true`, {
                 headers: {
                     Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}`
                 }
@@ -146,21 +152,19 @@ class AdminClassSelectInner extends Component<AdminClassSelectProps, ClassState>
         const { classes, selectedSchoolId, selectedSchoolName, errorMessage, isLoading } = this.state
         const hasSelectedSchool = selectedSchoolId !== -1
 
+        // Renders the interface using the current data and interaction state.
         return (
             <div className="projects-page admin-landing-root">
+                {/* Sets the page title and document metadata. */}
                 <Helmet>
                     <title>[Admin] MAAT</title>
                 </Helmet>
 
+                {/* Displays the navigation and actions available on this page. */}
                 <MenuComponent
-                    showUpload={false}
-                    showAdminUpload={false}
-                    showHelp={false}
-                    showCreate={false}
-                    showLast={false}
-                    showReviewButton={false}
                 ></MenuComponent>
 
+                {/* Shows the current location and links back to parent pages. */}
                 <DirectoryBreadcrumbs
                     items={[
                         { label: "School Selection", to: "/schools" },
@@ -238,9 +242,12 @@ class AdminClassSelectInner extends Component<AdminClassSelectProps, ClassState>
     }
 }
 
+// Renders the admin class select interface and coordinates its local data and interactions.
 export default function AdminClassSelect() {
     const navigate = useNavigate()
+    // Reads the school, class, or assignment identifiers from the current route.
     const { school_id } = useParams<{ school_id: string }>()
 
+    // Renders the interface using the current data and interaction state.
     return <AdminClassSelectInner navigate={navigate} schoolIdFromUrl={school_id || ""} />
 }

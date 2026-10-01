@@ -1,55 +1,120 @@
-from flask.json import jsonify
+"""Accept student submissions and preserve resumable upload state.
+
+Check enrollment, assignment targets, filenames, and cooldowns before saving
+uploads and invoking grading. Record submission outcomes and completion rewards.
+The student_upload_state endpoint saves, retrieves, or clears the student's last
+submission state so the frontend can resume the same assignment after a reload.
+Upload-state parsing retains the submission feature's interpretation of inputs.
+
+Endpoints use /api/upload/<handler_name>."""
+
+from flask_jwt_extended import current_user
+from src.core.models import ClassAssignments
+from src.core.database import db
+from src.core.constants import STUDENT_ROLE
+from datetime import datetime
+from src.core.models import StudentCheckpointSkips
+from src.core.models import StudentCooldownSkips
+from src.core.models import StudentStarAwards
+from src.core.models import StudentTestcaseInputPurchases
+from sqlalchemy import func
+from src.core.models import Submissions
+from src.core.models import Projects
+from http import HTTPStatus
+from math import ceil
+from flask import make_response
 import json
 import os
-import subprocess
-import tempfile
-from typing import Optional
-
-from flask_jwt_extended import jwt_required
-from flask_jwt_extended import current_user
-from flask import Blueprint
-from flask import request
-from flask import make_response
-from http import HTTPStatus
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
-from math import ceil
-from dependency_injector.wiring import inject, Provide
-from sqlalchemy import func
-
-from container import Container
-from src.constants import ADMIN_ROLE, STUDENT_ROLE, TEACHER_ROLE
+from src.core.models import Checkpoints
+from src.repositories.assignment_repository import AssignmentRepository
+from src.repositories.assignment_repository import normalize_grader_language
 from src.repositories.class_repository import ClassRepository
-from src.repositories.models import (
-    Checkpoints,
-    Classes,
-    ClassAssignments,
-    OfficeHoursQueueEntry,
-    OfficeHoursSession,
-    Projects,
-    StudentCheckpointSkips,
-    StudentCooldownSkips,
-    StudentStarAwards,
-    StudentTestcaseInputPurchases,
-    Submissions,
-    Users,
-)
-from src.repositories.project_repository import ProjectRepository
-from src.repositories.database import db
+from src.core.container import Container
+from dependency_injector.wiring import Provide
 from src.repositories.submission_repository import SubmissionRepository
 from src.repositories.user_repository import UserRepository
+from dependency_injector.wiring import inject
+from flask_jwt_extended import jwt_required
+from flask import request
+import subprocess
+import sys
+import tempfile
+from src.core.blueprints import upload_api
+from src.core.models import Users
+from flask import jsonify
+from src.core.models import StudentUploadState
+from src.core.constants import chicago_now
+from src.assignment_permissions import is_test_user_request, TEST_USER_ID, TEST_USER_FOLDER_PREFIX
+from src.assignment_permissions import current_user_is_enrolled_in_class
+from src.assignment_permissions import user_can_access_class_id
+from src.assignment_materials import module_folder_name
+from src.assignment_materials import stable_checkpoint_first_name
+from src.assignment_materials import stable_project_first_name
+from src.assignment_materials import student_root_for_class
+from src.assignment_setup import project_module
+from src.submissions import assignment_started_early
+from src.submissions import parse_submission_datetime_for_cooldown
+from src.submissions import project_window
+from src.submissions import serialize_cooldown_lifted_at
+from src.submissions import submission_cooldown_seconds_for_attempt_count
+from src.submissions import submission_scope_query
+from src.office_hours import active_office_hours_entry_for_project
 
-CHICAGO_TIMEZONE = ZoneInfo("America/Chicago")
+# Upload permissions, filenames, target order, cooldowns, rewards, and grader status.
 
 
-def submission_datetime_utc(value: datetime) -> datetime:
-    """Convert stored Chicago wall time to naive UTC for cooldown comparisons."""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=CHICAGO_TIMEZONE)
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+# Parse upload request values before authorization and file handling.
 
 
-upload_api = Blueprint("upload_api", __name__)
+def parse_int(v, default: int = 0) -> int:
+    """Parse an integer request value, returning the supplied fallback on failure.
+
+    Inputs: v, default."""
+    try:
+        return int(str(v).strip())
+    # Convert this failure into the fallback result or error response below.
+    except Exception:
+        return default
+
+
+def parse_bool(v) -> bool:
+    """Interpret a request boolean using this feature’s accepted spellings and fallback.
+
+    Inputs: v."""
+    # Handle the case where isinstance(v, bool).
+    if isinstance(v, bool):
+        return v
+
+    s = str(v or "").strip().lower()
+    return s in ("1", "true", "yes", "y", "on")
+
+
+# Uploads authorization and current-user scope checks.
+
+
+def user_id_is_enrolled_in_class(user_id: int, class_id: int) -> bool:
+    """Return whether the user has a class-assignment row for the class."""
+    user_id = parse_int(user_id, 0)
+    class_id = parse_int(class_id, 0)
+    # Return an empty or negative result when this guard matches.
+    if user_id <= 0 or class_id <= 0:
+        return False
+
+    return (
+        db.session.query(ClassAssignments.UserId)
+        .filter(
+            ClassAssignments.UserId == user_id,
+            ClassAssignments.ClassId == class_id,
+        )
+        .first()
+        is not None
+    )
+
+
+# Policy constants for uploads.
+
+
+
 
 ALLOWED_EXTENSIONS_BY_LANGUAGE = {
     "py": [".py"],
@@ -62,18 +127,47 @@ ALLOWED_EXTENSIONS_BY_LANGUAGE = {
     "scheme": [".rkt"],
 }
 
+
 ALLOWED_SOURCE_EXTENSIONS = {".py", ".java", ".c", ".rkt"}
+
+
 CHECKPOINT_SUBMISSION_COOLDOWN_AFTER_ATTEMPT = {1: 0, 2: 60, 3: 120, 4: 300}
+
+
 CHECKPOINT_SUBMISSION_COOLDOWN_MAX_SECONDS = 300
+
+
 MAIN_SUBMISSION_COOLDOWN_AFTER_ATTEMPT = {1: 0, 2: 120, 3: 300, 4: 600}
+
+
 MAIN_SUBMISSION_COOLDOWN_MAX_SECONDS = 1200
+
+
 CHECKPOINT_COMPLETION_STARS = 1
+
+
 MAIN_PROJECT_COMPLETION_STARS = 3
+
+
 EARLY_START_MULTIPLIER = 2
+
+
 PYTHON_IDE_MAX_SOURCE_BYTES = 256 * 1024
+
+
 PYTHON_IDE_MAX_STDIN_BYTES = 64 * 1024
+
+
 PYTHON_IDE_MAX_OUTPUT_BYTES = 256 * 1024
+
+
 PYTHON_IDE_TIMEOUT_SECONDS = 120
+
+
+# Helpers for uploads time.
+
+
+# Award completion stars and consume purchased cooldown skips.
 
 
 def current_star_balance(user_id: int, class_id: int) -> int:
@@ -81,33 +175,41 @@ def current_star_balance(user_id: int, class_id: int) -> int:
     user_id = int(user_id)
     class_id = int(class_id)
 
-    awarded = db.session.query(
-        func.coalesce(func.sum(StudentStarAwards.AwardedStars), 0)
-    ).filter(
-        StudentStarAwards.UserId == user_id,
-        StudentStarAwards.ClassId == class_id,
-    ).scalar()
+    awarded = (
+        db.session.query(func.coalesce(func.sum(StudentStarAwards.AwardedStars), 0))
+        .filter(
+            StudentStarAwards.UserId == user_id,
+            StudentStarAwards.ClassId == class_id,
+        )
+        .scalar()
+    )
 
-    checkpoint_spent = db.session.query(
-        func.coalesce(func.sum(StudentCheckpointSkips.SpentStars), 0)
-    ).filter(
-        StudentCheckpointSkips.UserId == user_id,
-        StudentCheckpointSkips.ClassId == class_id,
-    ).scalar()
+    checkpoint_spent = (
+        db.session.query(func.coalesce(func.sum(StudentCheckpointSkips.SpentStars), 0))
+        .filter(
+            StudentCheckpointSkips.UserId == user_id,
+            StudentCheckpointSkips.ClassId == class_id,
+        )
+        .scalar()
+    )
 
-    cooldown_spent = db.session.query(
-        func.coalesce(func.sum(StudentCooldownSkips.SpentStars), 0)
-    ).filter(
-        StudentCooldownSkips.UserId == user_id,
-        StudentCooldownSkips.ClassId == class_id,
-    ).scalar()
+    cooldown_spent = (
+        db.session.query(func.coalesce(func.sum(StudentCooldownSkips.SpentStars), 0))
+        .filter(
+            StudentCooldownSkips.UserId == user_id,
+            StudentCooldownSkips.ClassId == class_id,
+        )
+        .scalar()
+    )
 
-    testcase_input_spent = db.session.query(
-        func.coalesce(func.sum(StudentTestcaseInputPurchases.SpentStars), 0)
-    ).filter(
-        StudentTestcaseInputPurchases.UserId == user_id,
-        StudentTestcaseInputPurchases.ClassId == class_id,
-    ).scalar()
+    testcase_input_spent = (
+        db.session.query(func.coalesce(func.sum(StudentTestcaseInputPurchases.SpentStars), 0))
+        .filter(
+            StudentTestcaseInputPurchases.UserId == user_id,
+            StudentTestcaseInputPurchases.ClassId == class_id,
+        )
+        .scalar()
+    )
 
     return max(
         0,
@@ -118,57 +220,6 @@ def current_star_balance(user_id: int, class_id: int) -> int:
     )
 
 
-def project_window(project):
-    module = getattr(project, "Module", None)
-    if module is None:
-        module_id = parse_int(getattr(project, "ModuleId", 0), 0)
-        if module_id > 0:
-            try:
-                from src.repositories.models import Modules
-
-                module = Modules.query.filter(Modules.Id == module_id).first()
-            except Exception:
-                module = None
-
-    start = getattr(module, "Start", None) if module else None
-    end = getattr(module, "End", None) if module else None
-
-    return start, end
-
-
-def assignment_started_early(user_id: int, project, is_checkpoint: bool, checkpoint_id: int | None) -> bool:
-    start, end = project_window(project)
-    if not isinstance(start, datetime) or not isinstance(end, datetime) or end <= start:
-        return False
-
-    query = Submissions.query.filter(
-        Submissions.User == int(user_id),
-        Submissions.Project == int(project.Id),
-        Submissions.IsCheckpoint == bool(is_checkpoint),
-    )
-
-    if is_checkpoint:
-        query = query.filter(Submissions.CheckpointId == int(checkpoint_id or 0))
-    else:
-        query = query.filter(Submissions.CheckpointId.is_(None))
-
-    rows = query.order_by(Submissions.Time.asc()).all()
-    first_started_at = None
-
-    for row in rows:
-        parsed = parse_submission_datetime(getattr(row, "Time", None))
-        if parsed is None:
-            continue
-        if first_started_at is None or parsed < first_started_at:
-            first_started_at = parsed
-
-    if first_started_at is None:
-        return False
-
-    midpoint = start + ((end - start) / 2)
-    return first_started_at <= midpoint
-
-
 def award_completion_stars(
     user_id: int,
     class_id: int,
@@ -177,21 +228,31 @@ def award_completion_stars(
     checkpoint_id: int | None,
     submission_id: int,
 ) -> dict | None:
+    """Persist the completion reward for the authorized assignment scope.
 
+    Inputs: user_id, class_id, project, is_checkpoint, checkpoint_id, submission_id.
+    Database changes are committed at the explicit transaction boundaries below."""
+    # Return an empty or negative result when this guard matches.
     if project is None or submission_id is None:
+        return None
+
+    locked_user = Users.query.filter(Users.Id == int(user_id)).with_for_update().first()
+    if locked_user is None:
         return None
 
     checkpoint_key = int(checkpoint_id or 0) if is_checkpoint else 0
     award_type = "checkpoint_completion" if is_checkpoint else "main_completion"
 
+    # Execute the database lookup with the filters specified below.
     existing = StudentStarAwards.query.filter(
         StudentStarAwards.UserId == int(user_id),
         StudentStarAwards.ClassId == int(class_id),
         StudentStarAwards.ProjectId == int(project.Id),
         StudentStarAwards.CheckpointId == checkpoint_key,
         StudentStarAwards.AwardType == award_type,
-    ).first()
+    ).with_for_update().first()
 
+    # Handle the case where existing is not None.
     if existing is not None:
         return {
             "awarded": False,
@@ -201,7 +262,19 @@ def award_completion_stars(
         }
 
     base_stars = CHECKPOINT_COMPLETION_STARS if is_checkpoint else MAIN_PROJECT_COMPLETION_STARS
-    started_early = assignment_started_early(user_id, project, is_checkpoint, checkpoint_id)
+    start, end = project_window(project)
+    early_deadline = (
+        start + ((end - start) / 2)
+        if isinstance(start, datetime) and isinstance(end, datetime) and end > start
+        else None
+    )
+    started_early = assignment_started_early(
+        user_id,
+        project,
+        is_checkpoint,
+        checkpoint_key,
+        early_deadline,
+    )
     multiplier = EARLY_START_MULTIPLIER if started_early else 1
     stars = base_stars * multiplier
 
@@ -216,9 +289,11 @@ def award_completion_stars(
         Multiplier=int(multiplier),
         StartedEarly=bool(started_early),
         SubmissionId=int(submission_id),
-        AwardedAt=datetime.now(),
+        AwardedAt=chicago_now(),
     )
+    # Stage the new records in the current database transaction.
     db.session.add(row)
+    # Commit the pending database changes so they persist beyond this request.
     db.session.commit()
 
     balance = current_star_balance(user_id, class_id)
@@ -241,6 +316,11 @@ def consume_pending_cooldown_skip(
     checkpoint_id: int,
     latest_submission_time: datetime | None,
 ) -> bool:
+    """Mark an unused purchased skip as consumed by the next submission.
+
+    Inputs: user_id, class_id, project_id, checkpoint_id, latest_submission_time.
+    Database changes are committed at the explicit transaction boundaries below."""
+    # Execute the database lookup with the filters specified below.
     query = StudentCooldownSkips.query.filter(
         StudentCooldownSkips.UserId == int(user_id),
         StudentCooldownSkips.ClassId == int(class_id),
@@ -250,498 +330,23 @@ def consume_pending_cooldown_skip(
     )
 
     if latest_submission_time is not None:
-        submission_time_utc = submission_datetime_utc(latest_submission_time)
-        query = query.filter(StudentCooldownSkips.CreatedAt >= submission_time_utc)
+        submitted_at = parse_submission_datetime_for_cooldown(latest_submission_time)
+        if submitted_at is not None:
+            query = query.filter(StudentCooldownSkips.CreatedAt >= submitted_at)
 
+    # Execute the database lookup with the filters specified below.
     row = query.order_by(StudentCooldownSkips.CreatedAt.asc()).first()
+    # Return an empty or negative result when this guard matches.
     if row is None:
         return False
 
-    row.UsedAt = datetime.now(timezone.utc).replace(tzinfo=None)
+    row.UsedAt = chicago_now()
+    # Commit the pending database changes so they persist beyond this request.
     db.session.commit()
     return True
 
 
-def parse_int(v, default: int = 0) -> int:
-    try:
-        return int(str(v).strip())
-    except Exception:
-        return default
-
-
-def parse_bool(v) -> bool:
-    if isinstance(v, bool):
-        return v
-
-    s = str(v or "").strip().lower()
-    return s in ("1", "true", "yes", "y", "on")
-
-
-def current_user_id() -> int:
-    return parse_int(getattr(current_user, "Id", 0), 0)
-
-
-def current_user_global_role() -> int:
-    user_id = current_user_id()
-
-    if user_id <= 0:
-        return STUDENT_ROLE
-
-    role_rows = db.session.query(ClassAssignments.Role).filter(
-        ClassAssignments.UserId == user_id
-    ).all()
-
-    roles = []
-    for role_row in role_rows:
-        if hasattr(role_row, "Role"):
-            role_value = role_row.Role
-        elif isinstance(role_row, (tuple, list)):
-            role_value = role_row[0]
-        else:
-            role_value = role_row
-
-        roles.append(parse_int(role_value, STUDENT_ROLE))
-
-    return max([STUDENT_ROLE] + roles)
-
-
-def is_admin_user() -> bool:
-    return current_user_global_role() >= ADMIN_ROLE
-
-
-def is_teacher_user() -> bool:
-    return current_user_global_role() == TEACHER_ROLE
-
-
-def class_assignment_for_user(class_id: int, user_id: int):
-    class_id = parse_int(class_id, 0)
-    user_id = parse_int(user_id, 0)
-
-    if class_id <= 0 or user_id <= 0:
-        return None
-
-    try:
-        return ClassAssignments.query.filter(
-            ClassAssignments.ClassId == class_id,
-            ClassAssignments.UserId == user_id,
-        ).first()
-    except Exception:
-        return None
-
-
-def current_user_assignment_role_for_class(class_id: int) -> int | None:
-    assignment = class_assignment_for_user(class_id, current_user_id())
-
-    if assignment is None:
-        return None
-
-    return parse_int(getattr(assignment, "Role", None), STUDENT_ROLE)
-
-
-def user_id_is_enrolled_in_class(user_id: int, class_id: int) -> bool:
-    return class_assignment_for_user(class_id, user_id) is not None
-
-
-def current_user_is_enrolled_in_class(class_id: int) -> bool:
-    return user_id_is_enrolled_in_class(current_user_id(), class_id)
-
-
-def current_user_has_staff_assignment() -> bool:
-    user_id = current_user_id()
-
-    if user_id <= 0:
-        return False
-
-    try:
-        return (
-            ClassAssignments.query.filter(
-                ClassAssignments.UserId == user_id,
-                ClassAssignments.Role >= TEACHER_ROLE,
-            ).first()
-            is not None
-        )
-    except Exception:
-        return False
-
-
-def is_staff_user() -> bool:
-    return current_user_global_role() >= TEACHER_ROLE or current_user_has_staff_assignment()
-
-
-def user_can_access_class_id(class_id: int) -> bool:
-    class_id = parse_int(class_id, 0)
-
-    if class_id <= 0:
-        return False
-
-    class_item = Classes.query.filter(Classes.Id == class_id).first()
-    if class_item is None:
-        return False
-
-    if is_admin_user():
-        return True
-
-    assignment_role = current_user_assignment_role_for_class(class_id)
-
-    return assignment_role is not None and assignment_role >= TEACHER_ROLE
-
-
-def normalize_grader_language(language: str, solution_root: str = "") -> str:
-    raw = str(language or "").strip().lower()
-
-    aliases = {
-        "python": "py",
-        "python3": "py",
-        "py": "py",
-        "java": "java",
-        "c": "c",
-        "racket": "racket",
-        "rkt": "racket",
-        "scheme": "racket",
-        "scm": "racket",
-    }
-
-    if raw in aliases:
-        return aliases[raw]
-
-    try:
-        candidates = []
-
-        if solution_root and os.path.isdir(solution_root):
-            candidates = [
-                os.path.splitext(name)[1].lower()
-                for name in os.listdir(solution_root)
-            ]
-        elif solution_root:
-            candidates = [os.path.splitext(solution_root)[1].lower()]
-
-        if ".py" in candidates:
-            return "py"
-        if ".java" in candidates:
-            return "java"
-        if ".c" in candidates:
-            return "c"
-        if ".rkt" in candidates:
-            return "racket"
-    except Exception:
-        pass
-
-    return raw or "py"
-
-
-def allowed_file(filename: str) -> bool:
-    if not filename or "." not in filename:
-        return False
-
-    _, extension = os.path.splitext(filename)
-    return extension.lower() in ALLOWED_SOURCE_EXTENSIONS
-
-
-def expected_extensions_for_language(language: str) -> list[str]:
-    raw = str(language or "").strip().lower()
-    normalized = normalize_grader_language(raw)
-
-    if raw in ALLOWED_EXTENSIONS_BY_LANGUAGE:
-        return ALLOWED_EXTENSIONS_BY_LANGUAGE[raw]
-
-    if normalized in ALLOWED_EXTENSIONS_BY_LANGUAGE:
-        return ALLOWED_EXTENSIONS_BY_LANGUAGE[normalized]
-
-    return []
-
-
-def sanitize_fs_name(value: str) -> str:
-    safe = "".join(
-        c if c.isalnum() or c in "-_" else "_"
-        for c in str(value or "").strip()
-    )
-
-    return safe or "unknown"
-
-
-def safe_upload_filename(filename: str) -> str:
-    base = os.path.basename(filename or "")
-    stem, extension = os.path.splitext(base)
-
-    safe_stem = "".join(
-        c if c.isalnum() or c in "-_" else "_"
-        for c in str(stem or "").strip()
-    )
-
-    return f"{safe_stem or 'submission'}{extension.lower()}"
-
-
-def path_segment(value: str, fallback: str = "unnamed") -> str:
-    safe = sanitize_fs_name(value)
-    return safe if safe != "unknown" else fallback
-
-
-def project_files_root() -> str:
-    return "/tabot-files/project-files"
-
-
-def student_root_for_class(class_id: int) -> str:
-    class_item = Classes.query.filter(Classes.Id == int(class_id)).first()
-    class_name = path_segment(getattr(class_item, "Name", "") if class_item else f"class_{class_id}", f"class_{class_id}")
-    school = getattr(class_item, "School", None) if class_item else None
-    school_name = path_segment(getattr(school, "Name", "") if school else "school", "school")
-    return os.path.join(project_files_root(), school_name, class_name, "student-files")
-
-
-def project_module(project):
-    module = getattr(project, "Module", None)
-    if module:
-        return module
-    module_id = getattr(project, "ModuleId", None)
-    if module_id:
-        from src.repositories.models import Modules
-        return Modules.query.filter(Modules.Id == int(module_id)).first()
-    return None
-
-
-def module_folder_name(project, timestamp_hint: str) -> str:
-    module = project_module(project)
-    fallback_name = getattr(project, "Name", "") or "module"
-
-    if module is None:
-        return f"{timestamp_hint}_{path_segment(fallback_name, 'module')}"
-
-    changed = False
-
-    if not getattr(module, "FileTimestamp", None):
-        module.FileTimestamp = timestamp_hint
-        changed = True
-
-    if not getattr(module, "FirstName", None):
-        module.FirstName = getattr(module, "Name", None) or fallback_name
-        changed = True
-
-    if changed:
-        db.session.commit()
-
-    return f"{module.FileTimestamp}_{path_segment(module.FirstName, 'module')}"
-
-
-def project_first_folder(project) -> str:
-    if not getattr(project, "FirstName", None):
-        project.FirstName = getattr(project, "Name", None) or "project"
-        db.session.commit()
-    return path_segment(project.FirstName, "project")
-
-
-def checkpoint_first_folder(checkpoint: Checkpoints) -> str:
-    if not getattr(checkpoint, "FirstName", None):
-        checkpoint.FirstName = getattr(checkpoint, "Name", None) or "checkpoint"
-        db.session.commit()
-    return path_segment(checkpoint.FirstName, "checkpoint")
-
-
-def student_project_bucket(class_id: int, project, checkpoint: Optional[Checkpoints], timestamp_hint: str) -> str:
-    module_folder = module_folder_name(project, timestamp_hint)
-
-    if checkpoint is not None:
-        scope = "checkpoint"
-        item_folder = checkpoint_first_folder(checkpoint)
-    else:
-        scope = "main"
-        item_folder = project_first_folder(project)
-
-    return os.path.join(
-        student_root_for_class(class_id),
-        module_folder,
-        scope,
-        item_folder,
-    )
-
-
-def resolve_additional_files_payload(owner, solution_path: str) -> str:
-    try:
-        teacher_base_dir = (
-            solution_path
-            if solution_path and os.path.isdir(solution_path)
-            else os.path.dirname(solution_path or "")
-        )
-
-        raw = str(getattr(owner, "AdditionalFilePath", "") or "").strip()
-
-        if not raw:
-            return json.dumps({"base_dir": teacher_base_dir, "files": []})
-
-        if raw.startswith("[") or raw.startswith("{"):
-            parsed = json.loads(raw)
-        else:
-            parsed = [raw]
-
-        if isinstance(parsed, dict):
-            parsed = parsed.get("files", [])
-
-        abs_list = []
-
-        for path_value in parsed or []:
-            if not path_value:
-                continue
-
-            path_text = str(path_value)
-
-            if os.path.isabs(path_text):
-                abs_list.append(path_text)
-            else:
-                abs_list.append(
-                    os.path.join(teacher_base_dir, os.path.basename(path_text))
-                )
-
-        return json.dumps({"base_dir": teacher_base_dir, "files": abs_list})
-    except Exception:
-        return ""
-
-
-def load_grader_status(json_out: str) -> tuple[bool, dict]:
-    status = False
-    testcase_results = {"Passed": [], "Failed": []}
-
-    try:
-        with open(json_out, "r", encoding="utf-8", errors="replace") as f:
-            payload = json.load(f) or {}
-
-        passed = []
-        failed = []
-
-        for result in payload.get("results", []):
-            name = str((result or {}).get("name", "") or "")
-
-            if bool((result or {}).get("passed", False)):
-                passed.append(name)
-            else:
-                failed.append(name)
-
-        status = len(failed) == 0
-        testcase_results = {"Passed": passed, "Failed": failed}
-    except Exception:
-        pass
-
-    return status, testcase_results
-
-
-def parse_submission_datetime(value) -> datetime | None:
-    """Return Chicago wall time, matching the existing naive submission column."""
-    if isinstance(value, datetime):
-        return value.astimezone(CHICAGO_TIMEZONE).replace(tzinfo=None) if value.tzinfo else value
-
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-
-    if raw.endswith("Z"):
-        raw = f"{raw[:-1]}+00:00"
-
-    try:
-        parsed = datetime.fromisoformat(raw)
-        return parsed.astimezone(CHICAGO_TIMEZONE).replace(tzinfo=None) if parsed.tzinfo else parsed
-    except ValueError:
-        pass
-
-    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%m/%d/%y %H:%M:%S"):
-        try:
-            return datetime.strptime(raw[:19], fmt)
-        except ValueError:
-            pass
-
-    return None
-
-
-def active_office_hours_entry_for_project(
-    user_id: int,
-    class_id: int,
-    project_id: int,
-):
-    """Return a help exemption only while the class office-hours window is active."""
-    project = Projects.query.filter(
-        Projects.Id == int(project_id),
-        Projects.ClassId == int(class_id),
-    ).first()
-    module_id = parse_int(getattr(project, "ModuleId", 0), 0)
-    if module_id <= 0:
-        return None
-
-    try:
-        OfficeHoursSession.__table__.create(db.engine, checkfirst=True)
-        OfficeHoursQueueEntry.__table__.create(db.engine, checkfirst=True)
-    except Exception:
-        pass
-
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    session = OfficeHoursSession.query.filter(
-        OfficeHoursSession.ClassId == int(class_id),
-        OfficeHoursSession.StartedAt <= now,
-        OfficeHoursSession.EndsAt > now,
-    ).order_by(
-        OfficeHoursSession.StartedAt.desc(),
-        OfficeHoursSession.Id.desc(),
-    ).first()
-    if session is None:
-        return None
-
-    return OfficeHoursQueueEntry.query.filter(
-        OfficeHoursQueueEntry.UserId == int(user_id),
-        OfficeHoursQueueEntry.ClassId == int(class_id),
-        OfficeHoursQueueEntry.ModuleId == module_id,
-        OfficeHoursQueueEntry.CompletedAt.is_(None),
-        OfficeHoursQueueEntry.SelectedAt.isnot(None),
-        OfficeHoursQueueEntry.CooldownExemptUntil > now,
-        OfficeHoursQueueEntry.JoinedAt >= session.StartedAt,
-        OfficeHoursQueueEntry.JoinedAt < session.EndsAt,
-    ).first()
-
-
-def serialize_utc_datetime(value) -> str | None:
-    if not isinstance(value, datetime):
-        return None
-
-    if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
-
-    return f"{value.isoformat()}Z"
-
-
-def submission_cooldown_seconds_for_attempt_count(
-    completed_attempts: int,
-    is_checkpoint: bool,
-) -> int:
-    completed_attempts = max(0, int(completed_attempts or 0))
-
-    if completed_attempts <= 0:
-        return 0
-
-    schedule = (
-        CHECKPOINT_SUBMISSION_COOLDOWN_AFTER_ATTEMPT
-        if is_checkpoint
-        else MAIN_SUBMISSION_COOLDOWN_AFTER_ATTEMPT
-    )
-    max_seconds = (
-        CHECKPOINT_SUBMISSION_COOLDOWN_MAX_SECONDS
-        if is_checkpoint
-        else MAIN_SUBMISSION_COOLDOWN_MAX_SECONDS
-    )
-
-    return schedule.get(completed_attempts, max_seconds)
-
-
-def student_submission_scope_query(
-    user_id: int,
-    project_id: int,
-    is_checkpoint: bool,
-    checkpoint_id: int,
-):
-    query = Submissions.query.filter(
-        Submissions.User == int(user_id),
-        Submissions.Project == int(project_id),
-        Submissions.IsCheckpoint == bool(is_checkpoint),
-    )
-
-    if is_checkpoint:
-        return query.filter(Submissions.CheckpointId == int(checkpoint_id or 0))
-
-    return query.filter(Submissions.CheckpointId.is_(None))
+# Evaluate upload-time cooldowns and office-hours exemptions before grading.
 
 
 def student_submission_cooldown_response(
@@ -751,10 +356,14 @@ def student_submission_cooldown_response(
     is_checkpoint: bool,
     checkpoint_id: int,
 ):
-    if active_office_hours_entry_for_project(user_id, class_id, project_id) is not None:
+    """Handle student submission cooldown response for this component.
+
+    Inputs: user_id, class_id, project_id, is_checkpoint, checkpoint_id."""
+    # Return an empty or negative result when this guard matches.
+    if not is_test_user_request() and active_office_hours_entry_for_project(user_id, class_id, project_id) is not None:
         return None
 
-    scope_query = student_submission_scope_query(
+    scope_query = submission_scope_query(
         user_id,
         project_id,
         is_checkpoint,
@@ -762,12 +371,15 @@ def student_submission_cooldown_response(
     )
     completed_attempts = scope_query.count()
 
+    # Return an empty or negative result when this guard matches.
     if completed_attempts <= 0:
         return None
 
+    # Execute the database lookup with the filters specified below.
     latest = scope_query.order_by(Submissions.Time.desc(), Submissions.Id.desc()).first()
-    submitted_at = parse_submission_datetime(getattr(latest, "Time", None))
+    submitted_at = parse_submission_datetime_for_cooldown(getattr(latest, "Time", None))
 
+    # Return an empty or negative result when this guard matches.
     if submitted_at is None:
         return None
 
@@ -776,15 +388,16 @@ def student_submission_cooldown_response(
         is_checkpoint,
     )
     elapsed_seconds = (
-        datetime.now(timezone.utc).replace(tzinfo=None)
-        - submission_datetime_utc(submitted_at)
+        chicago_now() - submitted_at
     ).total_seconds()
     remaining_seconds = int(ceil(cooldown_seconds - elapsed_seconds))
 
+    # Return an empty or negative result when this guard matches.
     if remaining_seconds <= 0:
         return None
 
-    if consume_pending_cooldown_skip(
+    # Return an empty or negative result when this guard matches.
+    if not is_test_user_request() and consume_pending_cooldown_skip(
         user_id,
         class_id,
         project_id,
@@ -812,8 +425,162 @@ def student_submission_cooldown_response(
     return response
 
 
+# Read the external grader status payload associated with an upload.
+
+
+def load_grader_status(json_out: str) -> tuple[bool, dict]:
+    """Treat missing, malformed, or empty grading results as unsuccessful."""
+    empty = {"Passed": [], "Failed": []}
+    try:
+        with open(json_out, "r", encoding="utf-8", errors="replace") as grading_file:
+            payload = json.load(grading_file)
+        if not isinstance(payload, dict):
+            return False, empty
+        results = payload.get("results")
+        if not isinstance(results, list) or not results:
+            return False, empty
+        passed, failed = [], []
+        for result in results:
+            if not isinstance(result, dict) or type(result.get("passed")) is not bool:
+                return False, empty
+            name = str(result.get("name", "") or "")
+            (passed if result["passed"] else failed).append(name)
+        return not failed, {"Passed": passed, "Failed": failed}
+    except (OSError, ValueError, TypeError):
+        return False, empty
+
+
+# Helpers for uploads language.
+
+
+# Sanitize uploaded filenames and build stable student assignment directories.
+
+
+def allowed_file(filename: str) -> bool:
+    """Handle allowed file for this component.
+
+    Inputs: filename."""
+    # Return an empty or negative result when this guard matches.
+    if not filename or "." not in filename:
+        return False
+
+    _, extension = os.path.splitext(filename)
+    return extension.lower() in ALLOWED_SOURCE_EXTENSIONS
+
+
+def expected_extensions_for_language(language: str) -> list[str]:
+    """Handle expected extensions for language for this component.
+
+    Inputs: language."""
+    raw = str(language or "").strip().lower()
+    normalized = normalize_grader_language(raw)
+
+    # Handle the case where raw in ALLOWED_EXTENSIONS_BY_LANGUAGE.
+    if raw in ALLOWED_EXTENSIONS_BY_LANGUAGE:
+        return ALLOWED_EXTENSIONS_BY_LANGUAGE[raw]
+
+    # Handle the case where normalized in ALLOWED_EXTENSIONS_BY_LANGUAGE.
+    if normalized in ALLOWED_EXTENSIONS_BY_LANGUAGE:
+        return ALLOWED_EXTENSIONS_BY_LANGUAGE[normalized]
+
+    return []
+
+
+def sanitize_fs_name(value: str) -> str:
+    """Handle sanitize fs name for this component.
+
+    Inputs: value."""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(value or "").strip())
+
+    return safe or "unknown"
+
+
+def safe_upload_filename(filename: str) -> str:
+    """Handle safe upload filename for this component.
+
+    Inputs: filename."""
+    base = os.path.basename(str(filename or "").replace("\\", "/"))
+    stem, extension = os.path.splitext(base)
+
+    safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(stem or "").strip())
+
+    return f"{safe_stem or 'submission'}{extension.lower()}"
+
+
+def student_project_bucket(
+    class_id: int, project, checkpoint: Checkpoints | None, timestamp_hint: str
+) -> str:
+    """Return the stable student submission directory for an assignment scope."""
+    module = project_module(project)
+    module_folder = module_folder_name(
+        module,
+        getattr(project, "Name", "module"),
+        timestamp_hint,
+    )
+
+    if checkpoint is not None:
+        scope = "checkpoint"
+        item_folder = stable_checkpoint_first_name(
+            checkpoint,
+            getattr(checkpoint, "Name", "checkpoint"),
+        )
+    else:
+        scope = "main"
+        item_folder = stable_project_first_name(project, getattr(project, "Name", "project"))
+
+    return os.path.join(student_root_for_class(class_id), module_folder, scope, item_folder)
+
+
+def resolve_additional_files_payload(owner, solution_path: str) -> str:
+    """Resolve additional files payload.
+
+    Inputs: owner, solution_path."""
+    try:
+        teacher_base_dir = (
+            solution_path
+            if solution_path and os.path.isdir(solution_path)
+            else os.path.dirname(solution_path or "")
+        )
+
+        raw = str(getattr(owner, "AdditionalFilePath", "") or "").strip()
+
+        # Handle the case where not raw.
+        if not raw:
+            return json.dumps({"base_dir": teacher_base_dir, "files": []})
+
+        if raw.startswith("[") or raw.startswith("{"):
+            parsed = json.loads(raw)
+        else:
+            parsed = [raw]
+
+        if isinstance(parsed, dict):
+            parsed = parsed.get("files", [])
+
+        abs_list = []
+
+        # Process each path_value from parsed or [].
+        for path_value in parsed or []:
+            if not path_value:
+                continue
+
+            path_text = str(path_value)
+
+            if os.path.isabs(path_text):
+                abs_list.append(path_text)
+            else:
+                abs_list.append(os.path.join(teacher_base_dir, os.path.basename(path_text)))
+
+        return json.dumps({"base_dir": teacher_base_dir, "files": abs_list})
+    # Convert this failure into the fallback result or error response below.
+    except Exception:
+        return ""
+
+
+# Determine valid upload destinations and enforce checkpoint submission order.
+
+
 def student_upload_targets(
-    project_repo: ProjectRepository,
+    project_repo: AssignmentRepository,
     user_id: int,
     project_id: int,
 ) -> dict:
@@ -833,6 +600,7 @@ def student_upload_targets(
 
     passed_checkpoint_ids: set[int] = set()
     if checkpoint_ids:
+        # Execute the database lookup with the filters specified below.
         passed_rows = (
             db.session.query(Submissions.CheckpointId)
             .filter(
@@ -845,20 +613,14 @@ def student_upload_targets(
             .distinct()
             .all()
         )
-        passed_checkpoint_ids = {
-            int(row[0])
-            for row in passed_rows
-            if row and row[0] is not None
-        }
+        passed_checkpoint_ids = {int(row[0]) for row in passed_rows if row and row[0] is not None}
 
+    # Execute the database lookup with the filters specified below.
     skipped_rows = StudentCheckpointSkips.query.filter(
         StudentCheckpointSkips.UserId == int(user_id),
         StudentCheckpointSkips.ProjectId == int(project_id),
     ).all()
-    skipped_checkpoint_ids = {
-        int(getattr(row, "CheckpointId", 0) or 0)
-        for row in skipped_rows
-    }
+    skipped_checkpoint_ids = {int(getattr(row, "CheckpointId", 0) or 0) for row in skipped_rows}
 
     completed_checkpoint_ids = passed_checkpoint_ids | skipped_checkpoint_ids
     first_incomplete_index = next(
@@ -871,6 +633,7 @@ def student_upload_targets(
     )
 
     targets = []
+    # Process each (index, checkpoint) from enumerate(checkpoint_rows).
     for index, checkpoint in enumerate(checkpoint_rows):
         checkpoint_id = int(getattr(checkpoint, "Id", 0) or 0)
         completed = checkpoint_id in completed_checkpoint_ids
@@ -880,10 +643,7 @@ def student_upload_targets(
             {
                 "id": checkpoint_id,
                 "number": index + 1,
-                "name": str(
-                    getattr(checkpoint, "Name", "")
-                    or f"Checkpoint {index + 1}"
-                ),
+                "name": str(getattr(checkpoint, "Name", "") or f"Checkpoint {index + 1}"),
                 "enabled": bool(getattr(checkpoint, "Enabled", True)),
                 "completed": completed,
                 "available": available,
@@ -897,15 +657,19 @@ def student_upload_targets(
 
 
 def upload_target_order_error(
-    project_repo: ProjectRepository,
+    project_repo: AssignmentRepository,
     user_id: int,
     project_id: int,
     is_checkpoint: bool,
     checkpoint_id: int,
 ):
+    """Handle upload target order error for this component.
+
+    Inputs: project_repo, user_id, project_id, is_checkpoint, checkpoint_id."""
     targets = student_upload_targets(project_repo, user_id, project_id)
 
     if not is_checkpoint:
+        # Return an empty or negative result when this guard matches.
         if bool(targets.get("mainAvailable")):
             return None
 
@@ -928,6 +692,7 @@ def upload_target_order_error(
         None,
     )
 
+    # Return an empty or negative result when this guard matches.
     if checkpoint_target is not None and bool(checkpoint_target.get("available")):
         return None
 
@@ -942,371 +707,47 @@ def upload_target_order_error(
     )
 
 
-@upload_api.route("/total_students_by_cid", methods=["GET"])
-@jwt_required()
-@inject
-def total_students(user_repo: UserRepository = Provide[Container.user_repo]):
-    class_id = request.args.get("class_id")
-    class_id_int = parse_int(class_id, 0)
-
-    if class_id_int <= 0:
-        return make_response({"message": "Invalid class_id"}, HTTPStatus.BAD_REQUEST)
-
-    if not user_can_access_class_id(class_id_int):
-        return make_response({"message": "Access Denied"}, HTTPStatus.FORBIDDEN)
-
-    users = (
-        db.session.query(Users)
-        .join(ClassAssignments, ClassAssignments.UserId == Users.Id)
-        .filter(
-            ClassAssignments.ClassId == class_id_int,
-            ClassAssignments.Role == STUDENT_ROLE,
-        )
-        .order_by(Users.Lastname.asc(), Users.Firstname.asc(), Users.Id.asc())
-        .all()
-    )
-
-    list_of_user_info = []
-
-    for user in users:
-        list_of_user_info.append(
-            {
-                "name": f"{user.Firstname} {user.Lastname}".strip(),
-                "mscsnet": user.Username,
-                "id": user.Id,
-            }
-        )
-
-    return jsonify(list_of_user_info)
+# Authorize uploads, select destinations, invoke grading, and record the result.
 
 
-@upload_api.route("/available_targets", methods=["GET"])
-@jwt_required()
-@inject
-def available_targets(
-    project_repo: ProjectRepository = Provide[Container.project_repo],
-):
-    class_id = parse_int(request.args.get("class_id"), 0)
-    project_id = parse_int(request.args.get("project_id"), 0)
-    student_id = parse_int(request.args.get("student_id"), 0)
-
-    if class_id <= 0 or project_id <= 0 or student_id <= 0:
-        return make_response(
-            {"message": "class_id, project_id, and student_id are required"},
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    if not user_can_access_class_id(class_id):
-        return make_response({"message": "Access Denied"}, HTTPStatus.FORBIDDEN)
-
-    if not user_id_is_enrolled_in_class(student_id, class_id):
-        return make_response(
-            {"message": "Student is not enrolled in this class"},
-            HTTPStatus.FORBIDDEN,
-        )
-
-    project = project_repo.get_selected_project(project_id)
-    if (
-        project is None
-        or int(getattr(project, "ClassId", 0) or 0) != class_id
-    ):
-        return make_response(
-            {"message": "Project does not belong to this class"},
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    return jsonify(student_upload_targets(project_repo, student_id, project_id))
+# Uploads HTTP endpoints for submission.
 
 
-def resolve_python_ide_assignment(
-    project_repo: ProjectRepository,
-    class_id: int,
-    project_id: int,
-    checkpoint_id: int = 0,
-):
-    if class_id <= 0 or project_id <= 0:
-        return None, (
-            {"message": "class_id and project_id are required"},
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    is_staff = user_can_access_class_id(class_id)
-    if not is_staff and not current_user_is_enrolled_in_class(class_id):
-        return None, ({"message": "Access Denied"}, HTTPStatus.FORBIDDEN)
-
-    project = project_repo.get_selected_project(project_id)
-    if (
-        project is None
-        or int(getattr(project, "ClassId", 0) or 0) != class_id
-    ):
-        return None, (
-            {"message": "Project does not belong to this class"},
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    checkpoint = None
-    if checkpoint_id > 0:
-        checkpoint = project_repo.get_checkpoint(checkpoint_id)
-
-        if checkpoint is None:
-            return None, ({"message": "Checkpoint not found"}, HTTPStatus.NOT_FOUND)
-
-        if int(getattr(checkpoint, "ProjectId", 0) or 0) != project_id:
-            return None, (
-                {"message": "Checkpoint does not belong to this project"},
-                HTTPStatus.BAD_REQUEST,
-            )
-
-        if not is_staff and not bool(getattr(checkpoint, "Enabled", True)):
-            return None, ({"message": "Checkpoint is disabled"}, HTTPStatus.FORBIDDEN)
-
-    owner = checkpoint if checkpoint is not None else project
-    solution_path = ""
-
-    try:
-        solution_path = project_repo.get_project_path(
-            project_id,
-            checkpoint_id=(checkpoint_id if checkpoint is not None else None),
-        )
-    except Exception:
-        solution_path = ""
-
-    if not solution_path:
-        solution_path = str(getattr(owner, "solutionpath", "") or "")
-
-    effective_language = (
-        getattr(owner, "Language", None)
-        or getattr(project, "Language", None)
-        or ""
-    )
-
-    return {
-        "project": project,
-        "checkpoint": checkpoint,
-        "language": normalize_grader_language(effective_language, solution_path),
-    }, None
-
-
-def truncate_ide_output(value: str) -> tuple[str, bool]:
-    encoded = str(value or "").encode("utf-8")
-    if len(encoded) <= PYTHON_IDE_MAX_OUTPUT_BYTES:
-        return str(value or ""), False
-
-    clipped = encoded[:PYTHON_IDE_MAX_OUTPUT_BYTES].decode(
-        "utf-8",
-        errors="ignore",
-    )
-    return clipped, True
-
-
-@upload_api.route("/ide-context", methods=["GET"])
-@jwt_required()
-@inject
-def python_ide_context(
-    project_repo: ProjectRepository = Provide[Container.project_repo],
-):
-    class_id = parse_int(request.args.get("class_id"), 0)
-    project_id = parse_int(request.args.get("project_id"), 0)
-    checkpoint_id = parse_int(request.args.get("checkpoint_id"), 0)
-    context, error = resolve_python_ide_assignment(
-        project_repo,
-        class_id,
-        project_id,
-        checkpoint_id,
-    )
-
-    if error is not None:
-        payload, status = error
-        return make_response(payload, status)
-
-    language = str(context.get("language", "") or "")
-    return jsonify(
-        {
-            "language": language,
-            "python_ide_enabled": language == "py",
-            "default_filename": "main.py",
-            "execution_provider": "judge0",
-        }
-    )
-
-
-@upload_api.route("/run-python", methods=["POST"])
-@jwt_required()
-@inject
-def run_python_from_ide(
-    project_repo: ProjectRepository = Provide[Container.project_repo],
-):
-    data = request.get_json(silent=True) or {}
-    class_id = parse_int(data.get("class_id"), 0)
-    project_id = parse_int(data.get("project_id"), 0)
-    checkpoint_id = parse_int(data.get("checkpoint_id"), 0)
-    context, error = resolve_python_ide_assignment(
-        project_repo,
-        class_id,
-        project_id,
-        checkpoint_id,
-    )
-
-    if error is not None:
-        payload, status = error
-        return make_response(payload, status)
-
-    if context.get("language") != "py":
-        return make_response(
-            {"message": "The Python IDE is only available for Python assignments."},
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    source = data.get("source", "")
-    stdin_text = data.get("stdin", "")
-    requested_filename = str(data.get("filename", "main.py") or "main.py")
-
-    if not isinstance(source, str) or not source.strip():
-        return make_response(
-            {"message": "Python source code is required."},
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    if not isinstance(stdin_text, str):
-        return make_response(
-            {"message": "Program input must be text."},
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    if "\x00" in stdin_text:
-        return make_response(
-            {"message": "Program input contains an unsupported null character."},
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    if len(source.encode("utf-8")) > PYTHON_IDE_MAX_SOURCE_BYTES:
-        return make_response(
-            {"message": "The Python program is too large to run in the IDE."},
-            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-        )
-
-    if len(stdin_text.encode("utf-8")) > PYTHON_IDE_MAX_STDIN_BYTES:
-        return make_response(
-            {"message": "The program input is too large."},
-            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-        )
-
-    safe_filename = safe_upload_filename(requested_filename)
-    if (
-        len(requested_filename.encode("utf-8")) > 128
-        or not safe_filename.lower().endswith(".py")
-    ):
-        return make_response(
-            {
-                "message": (
-                    "The Python program needs a short file name ending in .py."
-                )
-            },
-            HTTPStatus.BAD_REQUEST,
-        )
-
-    grading_script = "/tabot-files/grading-scripts/grade.py"
-    if not os.path.isfile(grading_script):
-        return make_response(
-            {"message": "The Judge0 grading service is not configured."},
-            HTTPStatus.SERVICE_UNAVAILABLE,
-        )
-
-    try:
-        with tempfile.TemporaryDirectory(prefix="maat-python-ide-") as temp_dir:
-            source_path = os.path.join(temp_dir, safe_filename)
-
-            with open(source_path, "w", encoding="utf-8", newline="\n") as source_file:
-                source_file.write(source)
-
-            process = subprocess.run(
-                [
-                    "python",
-                    grading_script,
-                    "IDE",
-                    "py",
-                    stdin_text,
-                    source_path,
-                    "[]",
-                ],
-                cwd=temp_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=PYTHON_IDE_TIMEOUT_SECONDS,
-            )
-    except subprocess.TimeoutExpired:
-        return make_response(
-            {"message": "Judge0 did not finish the program in time."},
-            HTTPStatus.GATEWAY_TIMEOUT,
-        )
-    except OSError:
-        return make_response(
-            {"message": "The Judge0 grading service could not be started."},
-            HTTPStatus.SERVICE_UNAVAILABLE,
-        )
-
-    if process.returncode != 0:
-        return make_response(
-            {
-                "message": (
-                    process.stderr.strip()
-                    or "Judge0 could not run the Python program."
-                )
-            },
-            HTTPStatus.BAD_GATEWAY,
-        )
-
-    try:
-        result = json.loads(process.stdout or "{}")
-    except json.JSONDecodeError:
-        return make_response(
-            {"message": "Judge0 returned an unreadable response."},
-            HTTPStatus.BAD_GATEWAY,
-        )
-
-    response_payload = {}
-    was_truncated = False
-
-    for field in ("stdout", "stdout_transcript", "stderr", "compile_output"):
-        response_payload[field], field_truncated = truncate_ide_output(
-            result.get(field, "")
-        )
-        was_truncated = was_truncated or field_truncated
-
-    response_payload["truncated"] = was_truncated
-    response_payload["waiting_for_input"] = bool(
-        result.get("waiting_for_input", False)
-    )
-    response_payload["execution_provider"] = "judge0"
-
-    return jsonify(response_payload)
-
-
-@upload_api.route("/", methods=["POST"])
+@upload_api.route('/file_upload', methods=["POST"])
 @jwt_required()
 @inject
 def file_upload(
     user_repository: UserRepository = Provide[Container.user_repo],
     submission_repo: SubmissionRepository = Provide[Container.submission_repo],
-    project_repo: ProjectRepository = Provide[Container.project_repo],
+    project_repo: AssignmentRepository = Provide[Container.project_repo],
     class_repo: ClassRepository = Provide[Container.class_repo],
 ):
+    """Authorize, store, grade, and record an uploaded or editor-submitted program.
+
+    HTTP: POST /api/upload/file_upload.
+
+    Inputs: user_repository, submission_repo, project_repo, class_repo.
+    Invokes the configured external runner; preserve its timeout and output handling."""
+    # Read this input from the incoming HTTP request.
     class_id = request.form.get("class_id", "").strip()
 
+    # Return the response below when this validation or access check matches.
     if not class_id:
         return make_response({"message": "Missing class_id"}, HTTPStatus.BAD_REQUEST)
 
     class_id_int = parse_int(class_id, 0)
 
+    # Return the response below when this validation or access check matches.
     if class_id_int <= 0:
         return make_response({"message": "Invalid class_id"}, HTTPStatus.BAD_REQUEST)
 
+    # Read this input from the incoming HTTP request.
     submission_method = request.form.get("submission_method", "").strip().lower()
 
     if not submission_method:
         submission_method = "upload" if "student_id" in request.form else "unknown"
 
+    # Return the response below when this validation or access check matches.
     if submission_method not in {"upload", "editor", "unknown"}:
         return make_response(
             {"message": "Invalid submission_method"},
@@ -1315,18 +756,27 @@ def file_upload(
 
     is_staff_upload = user_can_access_class_id(class_id_int)
 
+    # Return the response below when this validation or access check matches.
     if "student_id" in request.form and not is_staff_upload:
         return make_response({"message": "Access Denied"}, HTTPStatus.FORBIDDEN)
 
+    # Return the response below when this validation or access check matches.
     if not is_staff_upload and not current_user_is_enrolled_in_class(class_id_int):
         return make_response({"message": "Access Denied"}, HTTPStatus.FORBIDDEN)
 
     username = current_user.Username
     user_id = current_user.Id
 
-    if "student_id" in request.form:
+    is_test_upload = is_test_user_request() and is_staff_upload
+    if request.headers.get("X-MAAT-Test-User") == "1" and not is_staff_upload:
+        return make_response({"message": "Access Denied"}, HTTPStatus.FORBIDDEN)
+    if is_test_upload:
+        username = f"{TEST_USER_FOLDER_PREFIX}{current_user.Id}"
+
+    if "student_id" in request.form and not is_test_upload:
         student_id = parse_int(request.form.get("student_id"), 0)
 
+        # Return the response below when this validation or access check matches.
         if student_id <= 0:
             return make_response(
                 {"message": "Invalid student_id"},
@@ -1336,6 +786,7 @@ def file_upload(
         user_lookup = user_repository.get_user(student_id)
         username = getattr(user_lookup, "Username", user_lookup)
 
+        # Return the response below when this validation or access check matches.
         if not username:
             return make_response(
                 {"message": "Student not found"},
@@ -1344,6 +795,7 @@ def file_upload(
 
         user_obj = user_repository.getUserByName(username)
 
+        # Return the response below when this validation or access check matches.
         if not user_obj:
             return make_response(
                 {"message": "Student not found"},
@@ -1352,6 +804,7 @@ def file_upload(
 
         user_id = user_obj.Id
 
+        # Return the response below when this validation or access check matches.
         if not user_id_is_enrolled_in_class(user_id, class_id_int):
             return make_response(
                 {"message": "Student is not enrolled in this class"},
@@ -1363,6 +816,7 @@ def file_upload(
     if "project_id" in request.form:
         project_id = parse_int(request.form.get("project_id"), 0)
 
+        # Return the response below when this validation or access check matches.
         if project_id <= 0:
             return make_response(
                 {"message": "Invalid project_id"},
@@ -1373,12 +827,14 @@ def file_upload(
     else:
         project = project_repo.get_current_project_by_class(class_id)
 
+    # Return the response below when this validation or access check matches.
     if project is None:
         return make_response(
             {"message": "No active project"},
             HTTPStatus.NOT_ACCEPTABLE,
         )
 
+    # Return the response below when this validation or access check matches.
     if int(getattr(project, "ClassId", 0) or 0) != class_id_int:
         return make_response(
             {"message": "Project does not belong to this class"},
@@ -1388,9 +844,10 @@ def file_upload(
     checkpoint_id = parse_int(request.form.get("checkpoint_id", ""), 0)
     is_checkpoint = parse_bool(request.form.get("checkpoint", "")) or checkpoint_id > 0
 
-    checkpoint: Optional[Checkpoints] = None
+    checkpoint: Checkpoints | None = None
 
     if is_checkpoint:
+        # Return the response below when this validation or access check matches.
         if checkpoint_id <= 0:
             return make_response(
                 {"message": "Missing checkpoint_id"},
@@ -1399,35 +856,39 @@ def file_upload(
 
         checkpoint = project_repo.get_checkpoint(checkpoint_id)
 
+        # Return the response below when this validation or access check matches.
         if checkpoint is None:
             return make_response(
                 {"message": "Checkpoint not found"},
                 HTTPStatus.NOT_FOUND,
             )
 
+        # Return the response below when this validation or access check matches.
         if int(getattr(checkpoint, "ProjectId", 0) or 0) != int(project.Id):
             return make_response(
                 {"message": "Checkpoint does not belong to this project"},
                 HTTPStatus.BAD_REQUEST,
             )
 
+        # Return the response below when this validation or access check matches.
         if not bool(getattr(checkpoint, "Enabled", True)):
             return make_response(
                 {"message": "Checkpoint is disabled"},
                 HTTPStatus.FORBIDDEN,
             )
 
-    order_error = upload_target_order_error(
+    order_error = None if is_test_upload else upload_target_order_error(
         project_repo,
         user_id,
         int(project.Id),
         is_checkpoint,
         checkpoint_id,
     )
+    # Handle the case where order_error is not None.
     if order_error is not None:
         return order_error
 
-    if not is_staff_upload:
+    if not is_staff_upload or (is_test_upload and request.headers.get("X-MAAT-Test-User") == "1"):
         cooldown_response = student_submission_cooldown_response(
             user_id,
             class_id_int,
@@ -1436,12 +897,15 @@ def file_upload(
             checkpoint_id,
         )
 
+        # Handle the case where cooldown_response is not None.
         if cooldown_response is not None:
             return cooldown_response
 
+    # Read this input from the incoming HTTP request.
     upload_files = request.files.getlist("files")
 
     if not upload_files:
+        # Read this input from the incoming HTTP request.
         single = request.files.get("file")
 
         if single and single.filename:
@@ -1449,21 +913,28 @@ def file_upload(
 
     upload_files = [f for f in upload_files if f and f.filename]
 
+    # Return the response below when this validation or access check matches.
     if not upload_files:
         return make_response({"message": "No selected file"}, HTTPStatus.BAD_REQUEST)
 
+    # Return the response below when this validation or access check matches.
     if not all(allowed_file(f.filename) for f in upload_files):
         return make_response(
             {"message": "Unsupported file type"},
             HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
         )
 
+    safe_filenames = [safe_upload_filename(f.filename) for f in upload_files]
+    if len(safe_filenames) != len(set(safe_filenames)):
+        return make_response(
+            {"message": "Uploaded filenames must be unique after sanitization"},
+            HTTPStatus.BAD_REQUEST,
+        )
+
     owner = checkpoint if checkpoint is not None else project
 
     effective_language = (
-        getattr(owner, "Language", None)
-        or getattr(project, "Language", None)
-        or ""
+        getattr(owner, "Language", None) or getattr(project, "Language", None) or ""
     )
 
     solution_path = ""
@@ -1479,6 +950,7 @@ def file_upload(
     if not solution_path:
         solution_path = str(getattr(owner, "solutionpath", "") or "")
 
+    # Return the response below when this validation or access check matches.
     if not solution_path:
         return make_response(
             {
@@ -1493,6 +965,7 @@ def file_upload(
 
     grader_language = normalize_grader_language(effective_language, solution_path)
 
+    # Return the response below when this validation or access check matches.
     if submission_method == "editor" and grader_language != "py":
         return make_response(
             {"message": "The Python editor can only submit Python assignments"},
@@ -1504,41 +977,31 @@ def file_upload(
     if not expected_extensions:
         expected_extensions = expected_extensions_for_language(grader_language)
 
+    # Return the response below when this validation or access check matches.
     if not expected_extensions:
         return make_response(
             {"message": "Unsupported language"},
             HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
         )
 
-    submitted_extensions = [
-        os.path.splitext(f.filename)[1].lower()
-        for f in upload_files
-    ]
+    submitted_extensions = [os.path.splitext(f.filename)[1].lower() for f in upload_files]
 
     if grader_language == "java":
         invalid_java_files = [
-            f.filename
-            for f in upload_files
-            if os.path.splitext(f.filename)[1].lower() != ".java"
+            f.filename for f in upload_files if os.path.splitext(f.filename)[1].lower() != ".java"
         ]
 
+        # Return the response below when this validation or access check matches.
         if invalid_java_files:
             return make_response(
-                {
-                    "message": (
-                        "Selected project expects Java: upload one or more .java files."
-                    )
-                },
+                {"message": ("Selected project expects Java: upload one or more .java files.")},
                 HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
             )
     else:
+        # Return the response below when this validation or access check matches.
         if len(upload_files) != 1:
             return make_response(
-                {
-                    "message": (
-                        "Only Java projects support multi-file student uploads."
-                    )
-                },
+                {"message": ("Only Java projects support multi-file student uploads.")},
                 HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
             )
 
@@ -1554,9 +1017,8 @@ def file_upload(
             )
 
     # Store submission times and folder timestamps in Chicago, including DST.
-    ts_now = datetime.now(CHICAGO_TIMEZONE)
+    ts_now = chicago_now()
     ts_stamp = ts_now.strftime("%Y%m%d_%H%M%S")
-    dt_string = ts_now.strftime("%Y/%m/%d %H:%M:%S")
 
     project_bucket = student_project_bucket(
         class_id_int,
@@ -1567,12 +1029,13 @@ def file_upload(
 
     safe_username = sanitize_fs_name(username)
     user_bucket = os.path.join(project_bucket, safe_username)
+    # Ensure the destination directory exists before writing files there.
     os.makedirs(user_bucket, exist_ok=True)
 
     outputpath = project_bucket
-    submission_dir = os.path.join(user_bucket, ts_stamp)
-    os.makedirs(submission_dir, exist_ok=True)
+    submission_dir = tempfile.mkdtemp(prefix=f"{ts_stamp}_", dir=user_bucket)
 
+    # Process each upload_file from upload_files.
     for upload_file in upload_files:
         safe_filename = safe_upload_filename(upload_file.filename)
         destination = os.path.join(submission_dir, safe_filename)
@@ -1593,7 +1056,7 @@ def file_upload(
     add_payload = resolve_additional_files_payload(owner, solution_path)
 
     cmd = [
-        "python",
+        sys.executable,
         grading_script,
         str(username),
         grader_language,
@@ -1604,8 +1067,20 @@ def file_upload(
         class_id_arg,
     ]
 
-    result = subprocess.run(cmd, cwd=outputpath)
+    # Launch the external command with the execution options below.
+    try:
+        result = subprocess.run(cmd, cwd=outputpath, timeout=300)
+    except subprocess.TimeoutExpired:
+        return make_response(
+            {"message": "The grading script timed out"}, HTTPStatus.GATEWAY_TIMEOUT
+        )
+    except OSError:
+        return make_response(
+            {"message": "The grading script could not be started"},
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
 
+    # Return the response below when this validation or access check matches.
     if result.returncode != 0:
         return make_response(
             {"message": "Error in running grading script!"},
@@ -1626,7 +1101,7 @@ def file_upload(
         user_id=user_id,
         output=json_out,
         codepath=submission_dir,
-        time=dt_string,
+        time=ts_now,
         project_id=project.Id,
         status=status,
         testcase_results=testcase_results,
@@ -1647,7 +1122,7 @@ def file_upload(
             submission_id=submission_id,
         )
 
-    completed_attempts = student_submission_scope_query(
+    completed_attempts = submission_scope_query(
         user_id,
         int(project.Id),
         is_checkpoint,
@@ -1679,7 +1154,7 @@ def file_upload(
         "submission_attempt_count": completed_attempts,
         "next_attempt_number": completed_attempts + 1,
         "office_hours_cooldown_exempt": office_hours_entry is not None,
-        "office_hours_cooldown_exempt_until": serialize_utc_datetime(
+        "office_hours_cooldown_exempt_until": serialize_cooldown_lifted_at(
             getattr(office_hours_entry, "CooldownExemptUntil", None)
         ),
         "star_award": star_award,
@@ -1687,3 +1162,353 @@ def file_upload(
     }
 
     return make_response(message, HTTPStatus.OK)
+
+
+# Uploads HTTP endpoints for targets.
+
+
+@upload_api.route('/total_students', methods=["GET"])
+@jwt_required()
+@inject
+def total_students(user_repo: UserRepository = Provide[Container.user_repo]):
+    """Handle total students for this component.
+
+    HTTP: GET /api/upload/total_students.
+
+    Inputs: user_repo."""
+    # Read this input from the incoming HTTP request.
+    class_id = request.args.get("class_id")
+    class_id_int = parse_int(class_id, 0)
+
+    # Return the response below when this validation or access check matches.
+    if class_id_int <= 0:
+        return make_response({"message": "Invalid class_id"}, HTTPStatus.BAD_REQUEST)
+
+    # Return the response below when this validation or access check matches.
+    if not user_can_access_class_id(class_id_int):
+        return make_response({"message": "Access Denied"}, HTTPStatus.FORBIDDEN)
+
+    # Execute the database lookup with the filters specified below.
+    users = (
+        db.session.query(Users)
+        .join(ClassAssignments, ClassAssignments.UserId == Users.Id)
+        .filter(
+            ClassAssignments.ClassId == class_id_int,
+            ClassAssignments.Role == STUDENT_ROLE,
+        )
+        .order_by(Users.Lastname.asc(), Users.Firstname.asc(), Users.Id.asc())
+        .all()
+    )
+
+    list_of_user_info = [{"name": "Test User", "mscsnet": "Admin testing", "id": TEST_USER_ID}]
+
+    # Process each user from users.
+    for user in users:
+        list_of_user_info.append(
+            {
+                "name": f"{user.Firstname} {user.Lastname}".strip(),
+                "mscsnet": user.Username,
+                "id": user.Id,
+            }
+        )
+
+    return jsonify(list_of_user_info)
+
+
+@upload_api.route('/available_targets', methods=["GET"])
+@jwt_required()
+@inject
+def available_targets(
+    project_repo: AssignmentRepository = Provide[Container.project_repo],
+):
+    """Handle available targets for this component.
+
+    HTTP: GET /api/upload/available_targets.
+
+    Inputs: project_repo."""
+    class_id = parse_int(request.args.get("class_id"), 0)
+    project_id = parse_int(request.args.get("project_id"), 0)
+    student_id = parse_int(request.args.get("student_id"), 0)
+
+    # Return the response below when this validation or access check matches.
+    if class_id <= 0 or project_id <= 0 or (student_id <= 0 and student_id != TEST_USER_ID):
+        return make_response(
+            {"message": "class_id, project_id, and student_id are required"},
+            HTTPStatus.BAD_REQUEST,
+        )
+
+    # Return the response below when this validation or access check matches.
+    if not user_can_access_class_id(class_id):
+        return make_response({"message": "Access Denied"}, HTTPStatus.FORBIDDEN)
+
+    # Return the response below when this validation or access check matches.
+    if student_id != TEST_USER_ID and not user_id_is_enrolled_in_class(student_id, class_id):
+        return make_response(
+            {"message": "Student is not enrolled in this class"},
+            HTTPStatus.FORBIDDEN,
+        )
+
+    project = project_repo.get_selected_project(project_id)
+    # Return the response below when this validation or access check matches.
+    if project is None or int(getattr(project, "ClassId", 0) or 0) != class_id:
+        return make_response(
+            {"message": "Project does not belong to this class"},
+            HTTPStatus.BAD_REQUEST,
+        )
+
+    targets = student_upload_targets(project_repo, current_user.Id if student_id == TEST_USER_ID else student_id, project_id)
+    if student_id == TEST_USER_ID:
+        targets["mainAvailable"] = True
+        for target in targets["checkpoints"]:
+            target["available"] = bool(target["enabled"])
+    return jsonify(targets)
+
+
+# Validate, persist, and return resumable student upload state.
+
+
+# Resolve and serialize resumable student upload state and its submission scope.
+
+
+def upload_state_scope_from_mapping(mapping) -> tuple[int, int, bool, int]:
+    """Handle upload state scope from mapping for this component.
+
+    Inputs: mapping."""
+    # Defer shared feature imports until the request or helper call.
+    from src.submissions import parse_bool as upload_state_parse_bool
+    from src.submissions import parse_int as upload_state_parse_int
+
+    class_id = upload_state_parse_int(mapping.get("class_id", 0), 0)
+    project_id = upload_state_parse_int(mapping.get("project_id", 0), 0)
+    checkpoint = upload_state_parse_bool(mapping.get("checkpoint", False))
+    checkpoint_id = upload_state_parse_int(mapping.get("checkpoint_id", 0), 0) if checkpoint else 0
+
+    return class_id, project_id, checkpoint, max(0, checkpoint_id)
+
+
+def current_user_can_use_upload_state(class_id: int, project_id: int, checkpoint_id: int) -> bool:
+    """Determine whether current user can use upload state.
+
+    Inputs: class_id, project_id, checkpoint_id."""
+    # Defer shared feature imports until the request or helper call.
+    from src.assignment_permissions import current_user_can_access_visible_project_id
+    from src.submissions import parse_int as upload_state_parse_int
+
+    class_id = upload_state_parse_int(class_id, 0)
+    project_id = upload_state_parse_int(project_id, 0)
+    checkpoint_id = upload_state_parse_int(checkpoint_id, 0)
+
+    # Return an empty or negative result when this guard matches.
+    if class_id <= 0 or project_id <= 0:
+        return False
+
+    # Execute the database lookup with the filters specified below.
+    project = Projects.query.filter(Projects.Id == project_id).first()
+    # Return an empty or negative result when this guard matches.
+    if project is None:
+        return False
+
+    # Return an empty or negative result when this guard matches.
+    if upload_state_parse_int(getattr(project, "ClassId", 0), 0) != class_id:
+        return False
+
+    # Return an empty or negative result when this guard matches.
+    if not current_user_can_access_visible_project_id(project_id):
+        return False
+
+    if checkpoint_id > 0:
+        # Execute the database lookup with the filters specified below.
+        checkpoint = Checkpoints.query.filter(
+            Checkpoints.Id == checkpoint_id,
+            Checkpoints.ProjectId == project_id,
+        ).first()
+        return checkpoint is not None
+
+    return True
+
+
+def get_student_upload_state_row(class_id: int, project_id: int, checkpoint_id: int):
+    """Return student upload state row.
+
+    Inputs: class_id, project_id, checkpoint_id."""
+    return StudentUploadState.query.filter(
+        StudentUploadState.UserId == int(current_user.Id),
+        StudentUploadState.ClassId == int(class_id),
+        StudentUploadState.ProjectId == int(project_id),
+        StudentUploadState.CheckpointId == int(checkpoint_id or 0),
+    ).first()
+
+
+def latest_submission_for_upload_state(
+    submission_repo: SubmissionRepository,
+    project_id: int,
+    checkpoint: bool,
+    checkpoint_id: int,
+):
+    """Handle latest submission for upload state for this component.
+
+    Inputs: submission_repo, project_id, checkpoint, checkpoint_id."""
+    # Defer shared feature imports until the request or helper call.
+    from src.submissions import latest_checkpoint_submission
+
+    # Handle the case where checkpoint.
+    if checkpoint:
+        return latest_checkpoint_submission(
+            int(project_id),
+            int(current_user.Id),
+            int(checkpoint_id) if checkpoint_id > 0 else None,
+        )
+
+    return submission_repo.get_submission_by_user_and_projectid(
+        int(current_user.Id),
+        int(project_id),
+    )
+
+
+def submission_matches_upload_state(
+    submission, project_id: int, checkpoint: bool, checkpoint_id: int
+) -> bool:
+    """Handle submission matches upload state for this component.
+
+    Inputs: submission, project_id, checkpoint, checkpoint_id."""
+    # Return an empty or negative result when this guard matches.
+    if submission is None:
+        return False
+
+    # Return an empty or negative result when this guard matches.
+    if int(getattr(submission, "User", -1) or -1) != int(current_user.Id):
+        return False
+
+    # Return an empty or negative result when this guard matches.
+    if int(getattr(submission, "Project", -1) or -1) != int(project_id):
+        return False
+
+    if checkpoint:
+        # Return an empty or negative result when this guard matches.
+        if not bool(getattr(submission, "IsCheckpoint", False)):
+            return False
+
+        # Return an empty or negative result when this guard matches.
+        if checkpoint_id > 0 and int(getattr(submission, "CheckpointId", 0) or 0) != int(
+            checkpoint_id
+        ):
+            return False
+
+    # Return an empty or negative result when this guard matches.
+    elif bool(getattr(submission, "IsCheckpoint", False)):
+        return False
+
+    return True
+
+
+def serialize_student_upload_state(
+    submission_repo: SubmissionRepository,
+    class_id: int,
+    project_id: int,
+    checkpoint: bool,
+    checkpoint_id: int,
+) -> dict:
+    """Serialize student upload state.
+
+    Inputs: submission_repo, class_id, project_id, checkpoint, checkpoint_id."""
+    # Defer shared feature imports until the request or helper call.
+    from src.submissions import submission_cooldown_state
+
+    latest_submission = latest_submission_for_upload_state(
+        submission_repo,
+        int(project_id),
+        bool(checkpoint),
+        int(checkpoint_id or 0),
+    )
+    latest_submission_id = (
+        int(getattr(latest_submission, "Id", 0) or 0) if latest_submission is not None else None
+    )
+    cooldown_state = submission_cooldown_state(
+        int(current_user.Id),
+        class_id,
+        project_id,
+        checkpoint,
+        checkpoint_id,
+    )
+
+    return {
+        "last_submission_id": latest_submission_id,
+        "previous_submission_id": latest_submission_id,
+        **cooldown_state,
+    }
+
+
+# Submissions HTTP endpoints for upload state.
+
+
+@upload_api.route('/student_upload_state', methods=["GET", "POST", "DELETE"])
+@jwt_required()
+@inject
+def student_upload_state(
+    submission_repo: SubmissionRepository = Provide[Container.submission_repo],
+):
+    """Handle student upload state for this component.
+
+    HTTP: GET, POST, DELETE /api/upload/student_upload_state.
+
+    Inputs: submission_repo.
+    Database changes are committed at the explicit transaction boundaries below."""
+    source = request.args if request.method == "GET" else (request.get_json(silent=True) or {})
+    class_id, project_id, checkpoint, checkpoint_id = upload_state_scope_from_mapping(source)
+
+    # Return the response below when this validation or access check matches.
+    if class_id <= 0 or project_id <= 0:
+        return make_response(
+            {"message": "class_id and project_id are required."}, HTTPStatus.BAD_REQUEST
+        )
+
+    # Return the response below when this validation or access check matches.
+    if not current_user_can_use_upload_state(class_id, project_id, checkpoint_id):
+        return make_response("Not Authorized", HTTPStatus.UNAUTHORIZED)
+
+    row = get_student_upload_state_row(class_id, project_id, checkpoint_id)
+
+    if request.method == "GET":
+        response = jsonify(
+            serialize_student_upload_state(
+                submission_repo,
+                class_id,
+                project_id,
+                checkpoint,
+                checkpoint_id,
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    if request.method == "DELETE":
+        if row is not None:
+            # Mark this record for deletion in the current transaction.
+            db.session.delete(row)
+            # Commit the pending database changes so they persist beyond this request.
+            db.session.commit()
+
+        return jsonify(
+            {
+                "last_submission_id": None,
+                "previous_submission_id": None,
+                "cooldown_lifted_at": None,
+                "cooldown_remaining_seconds": 0,
+            }
+        )
+
+    if row is not None:
+        # Mark this record for deletion in the current transaction.
+        db.session.delete(row)
+        # Commit the pending database changes so they persist beyond this request.
+        db.session.commit()
+
+    return jsonify(
+        serialize_student_upload_state(
+            submission_repo,
+            class_id,
+            project_id,
+            checkpoint,
+            checkpoint_id,
+        )
+    )

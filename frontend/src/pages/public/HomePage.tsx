@@ -1,4 +1,4 @@
-import React from "react";
+// HomePage.tsx: Renders the home page interface and coordinates its local data and interactions.
 import { Helmet } from "react-helmet";
 import { Link } from "react-router-dom";
 import {
@@ -14,6 +14,7 @@ import {
 import MenuComponent from "../components/MenuComponent";
 import "../../styling/HomePage.scss";
 
+// Reads the stored login token and rejects placeholder or missing values.
 const getValidStoredToken = (): string | null => {
   const token = localStorage.getItem("AUTOTA_AUTH_TOKEN");
 
@@ -35,23 +36,21 @@ const getValidStoredToken = (): string | null => {
   return cleanedToken;
 };
 
+// Renders the home page interface and coordinates its local data and interactions.
 function HomePage() {
   const isLoggedIn = Boolean(getValidStoredToken());
   const dashboardPath = "/schools";
 
+  // Renders the interface using the current data and interaction state.
   return (
     <div className="home-page">
+      {/* Sets the page title and document metadata. */}
       <Helmet>
         <title>MAAT</title>
       </Helmet>
 
+      {/* Displays the navigation and actions available on this page. */}
       <MenuComponent
-        showUpload={false}
-        showAdminUpload={false}
-        showHelp={false}
-        showCreate={false}
-        showLast={false}
-        showReviewButton={false}
       />
 
       <main className="home-shell">

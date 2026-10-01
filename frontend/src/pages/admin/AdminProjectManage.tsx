@@ -1,8 +1,8 @@
+// AdminProjectManage.tsx: Manages assignment instructions, solution files, and visible or hidden test cases.
 import React, { useEffect, useMemo, useState } from 'react'
 import MenuComponent from '../components/MenuComponent'
 import { Helmet } from 'react-helmet'
 import { useParams, useSearchParams } from 'react-router-dom'
-import { eachDayOfInterval } from 'date-fns'
 import axios from 'axios'
 import '../../styling/AdminProjectManage.scss'
 import '../../styling/FileUploadCommon.scss'
@@ -48,6 +48,7 @@ class Testcase {
 
 const INPUT_EVENT_PATTERN = /\[\[\[MAAT_INPUT_B64:([A-Za-z0-9_-]*)\]\]\]/g
 
+// Converts a recorded input event into the values used by the input transcript.
 function decodeInputEvent(encoded: string) {
     try {
         const padded = encoded.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encoded.length / 4) * 4, '=')
@@ -59,6 +60,7 @@ function decodeInputEvent(encoded: string) {
     }
 }
 
+// Renders the input transcript interface and coordinates its local data and interactions.
 function InputTranscript({ text }: { text: string }) {
     if (!text || !text.includes('[[[MAAT_INPUT_B64:')) return <>{text}</>
 
@@ -91,16 +93,20 @@ function InputTranscript({ text }: { text: string }) {
     }
 
     if (cursor < text.length) parts.push(text.slice(cursor))
+    // Renders the interface using the current data and interaction state.
     return <>{parts}</>
 }
 
+// Describes the admin project manage props data expected by this file.
 type AdminProjectManageProps = {
     practiceMode?: boolean
 }
 
+// Manages assignment instructions, solution files, and visible or hidden test cases.
 const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) => {
 
-    const { id, school_id, class_id, module_id, practice_problem_id, checkpoint_id } = useParams()
+    // Reads the school, class, or assignment identifiers from the current route.
+    const { id, school_id, class_id, module_id, checkpoint_id } = useParams()
 
     const [searchParams] = useSearchParams()
 
@@ -110,6 +116,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
     const moduleId = Number(module_id)
 
     if (Number.isNaN(project_id) || Number.isNaN(schoolId) || Number.isNaN(classId) || Number.isNaN(moduleId)) {
+        // Renders the interface using the current data and interaction state.
         return <div>Error: Missing or invalid school, class, module, or project ID.</div>
     }
 
@@ -117,14 +124,16 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
     const moduleOverviewUrl = `/admin/school/${schoolId}/class/${classId}/module/${moduleId}/overview`
     const projectBaseUrl = `/admin/school/${schoolId}/class/${classId}/module/${moduleId}/project/${project_id}`
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [testcases, setTestcases] = useState<Array<Testcase>>([])
     const [ProjectName, setProjectName] = useState<string>('')
     const [ProjectLanguage, setProjectLanguage] = useState<string>('')
     const [serverProjectNameSnapshot, setServerProjectNameSnapshot] = useState<string>('')
     const [serverProjectLanguageSnapshot, setServerProjectLanguageSnapshot] = useState<string>('')
     const [SubmitButton, setSubmitButton] = useState<string>('Submit file changes')
-    const [SubmitJSON, setSubmitJSON] = useState<string>('Submit JSON file')
-    const [getJSON, setGetJSON] = useState<string>('Export test cases to JSON')
+    const SubmitJSON = 'Submit JSON file'
+    const getJSON = 'Export test cases to JSON'
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [SolutionFiles, setSolutionFiles] = useState<File[]>([])
     const [serverSolutionFileNames, setServerSolutionFileNames] = useState<string[]>([])
     const [serverSolutionFileNamesSnapshot, setServerSolutionFileNamesSnapshot] = useState<string[]>([])
@@ -159,6 +168,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
     const [mainJavaFileName, setMainJavaFileName] = useState<string>('')
     const [practiceProblemNumber, setPracticeProblemNumber] = useState<number | null>(null)
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         const requestedStep = searchParams.get('step')
 
@@ -167,6 +177,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }, [searchParams])
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         document.body.style.overflow = ''
         return () => {
@@ -190,16 +201,13 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
     const API = import.meta.env.VITE_API_URL
     const authHeader = { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` }
     const isPractice = !!practiceMode
-    const practiceProblemId = isPractice && (checkpoint_id || practice_problem_id) ? Number(checkpoint_id || practice_problem_id) : null
+    const practiceProblemId = isPractice && checkpoint_id ? Number(checkpoint_id) : null
     const practiceProblemQuery =
         isPractice && practiceProblemId ? `&checkpoint_id=${practiceProblemId}` : ''
 
     const hasSavedSolution = serverSolutionFileNamesSnapshot.length > 0
     const hasSavedAssignmentDescription = serverDescFileName.trim() !== ''
     const hasSavedProjectFiles = hasSavedSolution && hasSavedAssignmentDescription
-
-    const hasSolution =
-        SolutionFiles.length > 0 || serverSolutionFileNames.length > 0
 
     const hasTestcases = testcases.some((tc) => tc.id > 0)
 
@@ -223,14 +231,18 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
     const ADD_ACCEPT = '.txt'
 
     const JAVA_MAIN_RE = /\bpublic\s+static\s+void\s+main\s*\(/
+    // Checks java file name for this view.
     const isJavaFileName = (n: string) => /\.java$/i.test(n)
 
+    // Helper for basename used by this component.
     const basename = (p: string) => (p || '').split(/[\\/]/).pop() || ''
 
+    // Normalizes name list for this view.
     const normalizeNameList = (names: string[]) =>
         [...names.map(basename).filter(Boolean)].sort((a, b) => a.localeCompare(b))
 
 
+    // Converts the stored hidden-test flag into the boolean used by the editor.
     const parseHidden = (v: any): boolean => {
         if (typeof v === 'boolean') return v
         if (typeof v === 'number') return v !== 0
@@ -241,6 +253,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         return false
     }
 
+    // Converts imported test-case data into the rows used by the editor.
     const parseTestcaseRows = (data: any): Array<Testcase> => {
         let parsedData = data
         if (typeof data === 'string') {
@@ -282,7 +295,9 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         return [...rows, blank]
     }
 
+    // Describes the solution lang data expected by this file.
     type SolutionLang = 'java' | 'python' | 'c' | 'racket'
+    // Helper for solution lang for used by this component.
     const solutionLangFor = (name: string): SolutionLang | null => {
         const lower = name.toLowerCase()
         if (lower.endsWith('.java')) return 'java'
@@ -292,6 +307,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         return null
     }
 
+    // Selects the Java entry file from the available solution or submission files.
     function pickMainJavaFile(allJavaNames: string[], namesWithMain: string[]): string {
         if (namesWithMain.length === 1) return namesWithMain[0]
         const mainDotJava = allJavaNames.find(n => n.toLowerCase() === 'main.java')
@@ -299,6 +315,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         return namesWithMain[0] || ''
     }
 
+    // Computes main java from local for this view.
     async function computeMainJavaFromLocal(files: File[]) {
         const javaFiles = files.filter(f => isJavaFileName(f.name))
         if (javaFiles.length <= 1) {
@@ -317,6 +334,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         setMainJavaFileName(pickMainJavaFile(javaFiles.map(f => f.name), withMain))
     }
 
+    // Computes main java from server for this view.
     async function computeMainJavaFromServer(names: string[]) {
         const javaNames = names.filter(isJavaFileName)
         if (javaNames.length <= 1) {
@@ -327,7 +345,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         await Promise.all(
             javaNames.map(async (name) => {
                 try {
-                    const url = new URL(`${API}/projects/get_source_file`)
+                    const url = new URL(`${API}/assignment_materials/get_source_file`)
                     url.searchParams.set('project_id', String(project_id))
                     url.searchParams.set('relpath', name)
                     url.searchParams.set('practice', isPractice ? 'true' : 'false')
@@ -344,11 +362,13 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         setMainJavaFileName(pickMainJavaFile(javaNames, withMain))
     }
 
+    // Loads server solution files for this view.
     async function loadServerSolutionFiles() {
         try {
+            // Fetches the server data needed for this operation.
             const res = await axios.get(
                 import.meta.env.VITE_API_URL +
-                `/projects/list_solution_files?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
+                `/assignment_materials/list_solution_files?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
 
                 { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
             )
@@ -362,6 +382,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         if (edit && project_id > 0) {
             loadServerSolutionFiles()
@@ -369,6 +390,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [edit, project_id, isPractice])
 
+    // Synchronizes this component with the values listed in the dependency array.
     useEffect(() => {
         let cancelled = false
             ; (async () => {
@@ -397,13 +419,16 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
     const CODE_ICON_RE = /\.(java|py|c|h|rkt|scm)$/i
     const TEXT_ICON_RE = /\.(txt|doc|docx|pdf)$/i
 
+    // Returns file icon for this view.
     function getFileIcon(filename: string): React.ReactNode {
         if (JSON_ICON_RE.test(filename)) return <TbJson className="file-language-icon json" aria-hidden="true" />
         if (CODE_ICON_RE.test(filename)) return <FaCode className="file-language-icon" aria-hidden="true" />
         if (TEXT_ICON_RE.test(filename)) return <FaAlignJustify className="file-language-icon" aria-hidden="true" />
+        // Renders the interface using the current data and interaction state.
         return <FaTimes className="file-language-icon" aria-hidden="true" />
     }
 
+    // Opens local preview for this view.
     async function openLocalPreview(file: File) {
         if (!SUPPORTED_RE.test(file.name)) {
             window.alert('Preview supports .py .c .h .java .rkt .scm (.cpp optional)')
@@ -415,6 +440,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         setPreviewOpen(true)
     }
 
+    // Opens all solution preview for this view.
     async function openAllSolutionPreview() {
         const isLocal = SolutionFiles.length > 0
         const names = isLocal ? SolutionFiles.map(f => f.name) : serverSolutionFileNames
@@ -433,7 +459,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
 
             const parts = await Promise.all(
                 serverSolutionFileNames.map(async (name) => {
-                    const url = new URL(`${API}/projects/get_source_file`)
+                    const url = new URL(`${API}/assignment_materials/get_source_file`)
                     url.searchParams.set('project_id', String(project_id))
                     url.searchParams.set('relpath', name)
                     url.searchParams.set('practice', isPractice ? 'true' : 'false')
@@ -452,19 +478,11 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
-    const languageLabel = (() => {
-        if (!ProjectLanguage) return 'Not detected yet'
-        if (ProjectLanguage === 'java') return 'Java'
-        if (ProjectLanguage === 'python') return 'Python'
-        if (ProjectLanguage === 'c') return 'C'
-        if (ProjectLanguage === 'racket') return 'Racket'
-        return ProjectLanguage
-    })()
-
+    // Fetches server file list for this view.
     async function fetchServerFileList(): Promise<string[]> {
 
         const res = await fetch(
-            `${API}/projects/list_source_files?project_id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
+            `${API}/assignment_materials/list_source_files?project_id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
             { headers: authHeader }
         )
 
@@ -475,8 +493,9 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         return list
     }
 
+    // Opens server preview for this view.
     async function openServerPreview(relpath?: string) {
-        const url = new URL(`${API}/projects/get_source_file`)
+        const url = new URL(`${API}/assignment_materials/get_source_file`)
         url.searchParams.set('project_id', String(project_id))
         if (relpath) url.searchParams.set('relpath', relpath)
 
@@ -491,6 +510,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         setPreviewOpen(true)
     }
 
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         if (edit && project_id > 0) {
             fetchServerFileList()
@@ -511,112 +531,15 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
     })()
 
 
+    // Keeps the values that drive this component’s display and user interactions in React state.
     const [ProjectStartDate, setProjectStartDate] = useState<Date | null>(null)
     const [ProjectEndDate, setProjectEndDate] = useState<Date | null>(null)
 
-    const [overlapError, setOverlapError] = useState<boolean>(false)
-
-    const highlightDates: Date[] =
-        ProjectStartDate && ProjectEndDate ? eachDayOfInterval({ start: ProjectStartDate, end: ProjectEndDate }) : []
-
-    const [projects, setProjects] = useState([])
-    useEffect(() => {
-        let cancelled = false
-        const fetchProjects = async () => {
-            try {
-                const response = await axios.get(
-                    `${import.meta.env.VITE_API_URL}/projects/get_projects_by_class_id?id=${classId}`,
-                    {
-                        headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
-                    }
-                )
-                const otherProjects = response.data.filter((pStr) => {
-                    const p = JSON.parse(pStr)
-                    return p.Id !== project_id
-                })
-                if (!cancelled) setProjects(otherProjects)
-            } catch (err) {
-                console.log(err)
-                if (!cancelled) setProjects([])
-            }
-        }
-
-        if (classId > 0) fetchProjects()
-        return () => {
-            cancelled = true
-        }
-    }, [classId, project_id])
-
-    const blockedDates = useMemo(() => {
-        const dates = [];
-
-        if (projects && projects.length > 0) {
-            projects.forEach((projectStr) => {
-                const project = JSON.parse(projectStr);
-                const projectStart = new Date(project.Start);
-                const projectEnd = new Date(project.End);
-
-                let currentDay = new Date(projectStart);
-                currentDay.setHours(0, 0, 0, 0);
-
-                const lastDay = new Date(projectEnd);
-                lastDay.setHours(0, 0, 0, 0);
-
-                while (currentDay <= lastDay) {
-
-                    const dayStart = new Date(currentDay);
-                    dayStart.setHours(0, 0, 0, 0); // 00:00:00
-
-                    const dayEnd = new Date(currentDay);
-                    dayEnd.setHours(23, 59, 0, 0); // 23:59
-
-                    const isFullyOccupied = (projectStart <= dayStart) && (projectEnd >= dayEnd);
-
-                    if (isFullyOccupied) {
-                        dates.push(new Date(currentDay));
-                    }
-
-                    currentDay.setDate(currentDay.getDate() + 1);
-                }
-            });
-        }
-        return dates;
-    }, [projects]);
-
-    const projectRanges = useMemo(() => {
-        if (!projects) return [];
-        return projects.map((pStr) => {
-            const p = JSON.parse(pStr);
-            return {
-                start: new Date(p.Start),
-                end: new Date(p.End)
-            };
-        });
-    }, [projects]);
-
-
-    const handleTimeColors = (time) => {
-        const isBlocked = projectRanges.some((range) => {
-            // Allow boundary-touching (end == start) without marking as blocked
-            return time > range.start && time < range.end;
-        });
-
-        return isBlocked ? "react-datepicker__time--highlighted-red" : null;
-    };
-
-    const getInjectedTimes = (dateValue) => {
-        if (!dateValue) return [];
-
-        const endOfDay = new Date(dateValue);
-
-        endOfDay.setHours(23, 59, 0, 0);
-
-        return [endOfDay];
-    };
-
+    // Loads or refreshes view data when the dependencies below change.
     useEffect(() => {
         let cancelled = false
 
+        // Resets for switch for this view.
         const resetForSwitch = () => {
             setLoadingProjectState(true)
 
@@ -648,6 +571,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             setSubmitButton('Submit file changes')
         }
 
+        // Helper for load used by this component.
         const load = async () => {
             if (!project_id || project_id === 0) {
                 if (!cancelled) setLoadingProjectState(false)
@@ -657,13 +581,14 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             resetForSwitch()
 
             try {
+                // Fetches the server data needed for this operation.
                 const [tcRes, projRes] = await Promise.all([
                     axios.get(
-                        `${import.meta.env.VITE_API_URL}/projects/get_testcases?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
+                        `${import.meta.env.VITE_API_URL}/assignment_materials/get_testcases?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
                         { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
                     ),
                     axios.get(
-                        `${import.meta.env.VITE_API_URL}/projects/get_project_id?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
+                        `${import.meta.env.VITE_API_URL}/assignment_tracking/get_project?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`,
                         { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
                     ),
                 ])
@@ -742,6 +667,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [project_id, isPractice])
 
+    // Handles name change for this view.
     function handleNameChange(testcase_id: number, name: string) {
         setModalDraft(prev => {
             if (prev && prev.id === testcase_id) return { ...prev, name }
@@ -749,6 +675,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         })
     }
 
+    // Handles input change for this view.
     function handleInputChange(testcase_id: number, input_data: string) {
         setModalDraft(prev => {
             if (prev && prev.id === testcase_id) return { ...prev, input: input_data }
@@ -756,6 +683,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         })
     }
 
+    // Handles hidden change for this view.
     function handleHiddenChange(testcase_id: number, hidden: boolean) {
         setModalDraft(prev => {
             if (prev && prev.id === testcase_id) return { ...prev, hidden }
@@ -763,6 +691,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         })
     }
 
+    // Helper for buttonhandle trash click used by this component.
     function buttonhandleTrashClick(testcase: number) {
         let test: Testcase = new Testcase()
         for (let i = 0; i < testcases.length; i++) {
@@ -776,10 +705,10 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         formData.append('id', test.id.toString())
 
         axios
-            .post(import.meta.env.VITE_API_URL + `/projects/remove_testcase`, formData, {
+            .post(import.meta.env.VITE_API_URL + `/assignment_materials/remove_testcase`, formData, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
-            .then(function (response) {
+            .then(function () {
                 reloadtests()
             })
             .catch(function (error) {
@@ -789,9 +718,10 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         setModalOpen(false)
     }
 
+    // Helper for reloadtests used by this component.
     function reloadtests() {
         return axios
-            .get(import.meta.env.VITE_API_URL + `/projects/get_testcases?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`, {
+            .get(import.meta.env.VITE_API_URL + `/assignment_materials/get_testcases?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
             .then(res => {
@@ -802,81 +732,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             })
     }
 
-    function setDate(date: Date | null, isStart: boolean) {
-        let finalDate = date;
-
-        const previousDate = isStart ? ProjectStartDate : ProjectEndDate;
-        const isNewDay = !previousDate || (date && date.toDateString() !== previousDate.toDateString());
-
-        if (finalDate && isNewDay) {
-            // Allow boundary-touching (end == start) without treating it as blocked
-            const isBlocked = projectRanges.some(range =>
-                finalDate > range.start && finalDate < range.end
-            );
-
-            if (isBlocked) {
-                let candidate = new Date(finalDate);
-                candidate.setHours(0, 0, 0, 0);
-
-                let foundSafeTime = false;
-
-                const checkTime = (t) => projectRanges.some(r => t > r.start && t < r.end);
-
-                while (candidate.getDate() === finalDate.getDate()) {
-                    if (!checkTime(candidate)) {
-                        finalDate = candidate;
-                        foundSafeTime = true;
-                        break;
-                    }
-                    candidate.setMinutes(candidate.getMinutes() + 15);
-                }
-
-                //checks 11:59 if loop failed
-                if (!foundSafeTime) {
-                    let endOfDay = new Date(finalDate);
-                    endOfDay.setHours(23, 59, 0, 0);
-                    if (!checkTime(endOfDay)) {
-                        finalDate = endOfDay;
-                    }
-                }
-            }
-        }
-
-        if (isStart) {
-            setProjectStartDate(finalDate);
-        } else {
-            setProjectEndDate(finalDate);
-        }
-
-        if (!finalDate) {
-            setOverlapError(false);
-            return;
-        }
-
-
-        const startToCheck = isStart ? finalDate : ProjectStartDate;
-        const endToCheck = isStart ? ProjectEndDate : finalDate;
-
-        let overlap = false;
-        for (const project of projectRanges) {
-
-
-            if (finalDate > project.start && finalDate < project.end) {
-                overlap = true;
-                break;
-            }
-
-            if (startToCheck && endToCheck) {
-                if (startToCheck < project.end && endToCheck > project.start) {
-                    overlap = true;
-                    break;
-                }
-            }
-        }
-
-        setOverlapError(overlap);
-    }
-
+    // Handles json submit for this view.
     async function handleJsonSubmit() {
         try {
             setSubmittingJson(true)
@@ -895,7 +751,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
                 formData.append('checkpoint_id', String(practiceProblemId))
             }
 
-            await axios.post(import.meta.env.VITE_API_URL + `/projects/json_add_testcases`, formData, {
+            await axios.post(import.meta.env.VITE_API_URL + `/assignment_materials/json_add_testcases`, formData, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
 
@@ -911,6 +767,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Handles new submit for this view.
     async function handleNewSubmit() {
         if (!ProjectName || !ProjectStartDate || !ProjectEndDate || !ProjectLanguage) {
             window.alert('Please fill out all fields')
@@ -927,8 +784,9 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
 
         try {
             setSubmittingProject(true)
+            // Sends this operation and its payload to the server.
             const conflictCheck = await axios.post(
-                `${import.meta.env.VITE_API_URL}/projects/check_time_conflict`,
+                `${import.meta.env.VITE_API_URL}/assignment_setup/check_time_conflict`,
                 {
                     project_id: project_id,
                     class_id: classId,
@@ -963,7 +821,8 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             formData.append('module_id', moduleId.toString())
             formData.append('practice_problems_enabled', 'true')
 
-            const res = await axios.post(`${import.meta.env.VITE_API_URL}/projects/create_project`, formData, {
+            // Sends this operation and its payload to the server.
+            const res = await axios.post(`${import.meta.env.VITE_API_URL}/assignment_setup/create_project`, formData, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
             const newId = res.data
@@ -978,6 +837,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Handles edit submit for this view.
     async function handleEditSubmit() {
         try {
             if (!ProjectLanguage) {
@@ -1016,7 +876,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             formData.append('module_id', moduleId.toString())
             formData.append('practice_problems_enabled', 'true')
 
-            await axios.post(`${import.meta.env.VITE_API_URL}/projects/edit_project`, formData, {
+            await axios.post(`${import.meta.env.VITE_API_URL}/assignment_setup/edit_project`, formData, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
 
@@ -1030,6 +890,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Handles open modal for this view.
     function handleOpenModal(TestCaseId: number) {
         setModalOpen(true)
         setSelectedTestCaseId(TestCaseId)
@@ -1051,6 +912,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Updates hidden from row for this view.
     async function setHiddenFromRow(tc: Testcase, hidden: boolean) {
         if (!hasSavedProjectFiles) {
             window.alert('Save both the solution file(s) and assignment description before editing test cases.')
@@ -1072,7 +934,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
 
         try {
             setSubmittingTestcase(true)
-            await axios.post(import.meta.env.VITE_API_URL + `/projects/add_or_update_testcase`, formData, {
+            await axios.post(import.meta.env.VITE_API_URL + `/assignment_materials/add_or_update_testcase`, formData, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
             await reloadtests()
@@ -1083,6 +945,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Handles solution files change for this view.
     function handleSolutionFilesChange(event: React.FormEvent) {
         const target = event.target as HTMLInputElement
         const files = target.files
@@ -1131,6 +994,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         setProjectLanguage(onlyLang ?? '')
     }
 
+    // Handles json file change for this view.
     function handleJsonFileChange(event: React.FormEvent) {
         const target = event.target as HTMLInputElement
         const files = target.files
@@ -1150,6 +1014,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Handles desc file change for this view.
     function handleDescFileChange(event: React.FormEvent) {
         const target = event.target as HTMLInputElement
         const files = target.files
@@ -1169,13 +1034,15 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Downloads assignment description for this view.
     async function downloadAssignmentDescription() {
         try {
 
             const url =
-                `${import.meta.env.VITE_API_URL}/projects/getAssignmentDescription?project_id=${project_id}` +
+                `${import.meta.env.VITE_API_URL}/assignment_materials/getAssignmentDescription?project_id=${project_id}` +
                 `&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`
 
+            // Fetches the server data needed for this operation.
             const res = await axios.get(url, {
                 responseType: 'blob',
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
@@ -1197,6 +1064,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Handles practice files submit for this view.
     async function handlePracticeFilesSubmit() {
         if (!isPractice) return
         if (!practiceProblemId) {
@@ -1216,7 +1084,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             try {
                 setSubmittingProject(true)
                 await axios.post(
-                    `${import.meta.env.VITE_API_URL}/projects/rename_checkpoint`,
+                    `${import.meta.env.VITE_API_URL}/assignment_setup/rename_checkpoint`,
                     {
                         project_id,
                         checkpoint_id: practiceProblemId,
@@ -1252,7 +1120,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             formData.append('name', ProjectName)
             formData.append('language', ProjectLanguage)
 
-            await axios.post(`${import.meta.env.VITE_API_URL}/projects/edit_checkpoint_project_files`, formData, {
+            await axios.post(`${import.meta.env.VITE_API_URL}/assignment_materials/edit_checkpoint_project_files`, formData, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
 
@@ -1266,6 +1134,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Handles additional file change for this view.
     function handleAdditionalFileChange(event: React.FormEvent) {
         const target = event.target as HTMLInputElement
         const files = target.files
@@ -1284,16 +1153,20 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         })
     }
 
+    // Removes selected additional for this view.
     function removeSelectedAdditional(name: string) {
         setSelectedAddFiles(prev => prev.filter(f => f.name !== name))
     }
 
+    // Removes server additional for this view.
     function removeServerAdditional(name: string) {
         setRemovedAdditionalFiles(prev => (prev.includes(name) ? prev : [...prev, name]))
         setAdditionalFileNames(prev => prev.filter(n => n !== name))
     }
 
+    // Formats date time local for this view.
     function formatDateTimeLocal(date: Date): string {
+        // Helper for pad used by this component.
         const pad = (n: number) => n.toString().padStart(2, '0')
         return [
             date.getFullYear(),
@@ -1308,6 +1181,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         ].join('')
     }
 
+    // Recomputes has unsaved project changes only when its dependencies change.
     const hasUnsavedProjectChanges = useMemo(() => {
         if (loadingProjectState) return false
 
@@ -1372,7 +1246,8 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         serverDescFileName,
     ])
 
-    async function buttonhandleClick(testcase: number) {
+    // Helper for buttonhandle click used by this component.
+    async function buttonhandleClick() {
         if (!modalDraft) return
 
         if (!hasSavedProjectFiles) {
@@ -1402,7 +1277,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
 
         try {
             setSubmittingTestcase(true)
-            await axios.post(import.meta.env.VITE_API_URL + `/projects/add_or_update_testcase`, formData, {
+            await axios.post(import.meta.env.VITE_API_URL + `/assignment_materials/add_or_update_testcase`, formData, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
             await reloadtests()
@@ -1415,9 +1290,10 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Builds the JSON representation of the current test cases.
     function get_testcase_json() {
         axios
-            .get(import.meta.env.VITE_API_URL + `/projects/get_testcases?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`, {
+            .get(import.meta.env.VITE_API_URL + `/assignment_materials/get_testcases?id=${project_id}&practice=${isPractice ? 'true' : 'false'}${practiceProblemQuery}`, {
                 headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` },
             })
             .then(res => {
@@ -1425,8 +1301,8 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
                     .filter(testcase => testcase.id > 0)
                     .map(testcase => ({
                         name: testcase.name,
-                        input: testcase.input,
-                        output: testcase.output,
+                        input: testcase.input.replace(/\r\n?/g, '\n'),
+                        output: testcase.output.replace(/\r\n?/g, '\n'),
                         hidden: testcase.hidden,
                         order: testcase.order,
                     }))
@@ -1448,6 +1324,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
     }
 
     const selectedTestCase = modalDraft
+    // Recomputes ordered testcases only when its dependencies change.
     const orderedTestcases = useMemo(
         () => testcases
             .filter(testcase => testcase.id > 0)
@@ -1455,6 +1332,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         [testcases]
     )
 
+    // Moves a test case to a new position in the ordered list.
     async function moveTestcase(testcaseId: number, direction: -1 | 1) {
         if (reorderingTestcases) return
 
@@ -1485,7 +1363,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         try {
             setReorderingTestcases(true)
             await axios.post(
-                import.meta.env.VITE_API_URL + `/projects/reorder_testcases`,
+                import.meta.env.VITE_API_URL + `/assignment_materials/reorder_testcases`,
                 formData,
                 { headers: { Authorization: `Bearer ${localStorage.getItem('AUTOTA_AUTH_TOKEN')}` } }
             )
@@ -1498,7 +1376,9 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         }
     }
 
+    // Describes the dir entry data expected by this file.
     type DirEntry = { key: string; name: string; status: 'none' | 'add' | 'remove'; kind: 'server' | 'local' | 'other' }
+    // Helper for base name used by this component.
     const baseName = (p: string) => (p || '').split(/[\\/]/).pop()!
 
     const serverNames = [
@@ -1516,9 +1396,11 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
 
     const removedNames = removedAdditionalFiles.map(baseName)
 
+    // Describes the flag data expected by this file.
     type Flag = { server: boolean; local: boolean; removed: boolean }
     const flags = new Map<string, Flag>()
 
+    // Helper for mk entry used by this component.
     const mkEntry = (key: string, name: string, status: DirEntry['status'], kind: DirEntry['kind']): DirEntry => ({
         key,
         name,
@@ -1526,6 +1408,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         kind,
     })
 
+    // Helper for mark used by this component.
     const mark = (names: string[], k: 'server' | 'local' | 'removed') => {
         names.forEach(n => {
             if (!n) return
@@ -1565,6 +1448,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
             return [mkEntry(`${name}__other`, name, 'none', 'other')]
         })
         .sort((a, b) => {
+            // Helper for rank used by this component.
             const rank = (s: DirEntry['status']) => (s === 'remove' ? 0 : s === 'add' ? 1 : 2)
             return rank(a.status) - rank(b.status) || a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind)
         })
@@ -1579,21 +1463,19 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
         (submittingJson && 'Uploading test cases...') ||
         'Loading...'
 
+    // Renders the interface using the current data and interaction state.
     return (
         <div>
+            {/* Sets the page title and document metadata. */}
             <Helmet>
                 <title>[Admin] MAAT</title>
             </Helmet>
 
+            {/* Displays the navigation and actions available on this page. */}
             <MenuComponent
-                showUpload={false}
-                showAdminUpload={true}
-                showHelp={false}
-                showCreate={false}
-                showLast={false}
-                showReviewButton={false}
             />
 
+            {/* Shows the current location and links back to parent pages. */}
             <DirectoryBreadcrumbs
                 items={[
                     { label: 'School Selection', to: '/schools' },
@@ -1712,6 +1594,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
                                                                         ProjectLanguage === 'java' &&
                                                                         shownNames.filter(isJavaFileName).length > 1 &&
                                                                         !!mainJavaFileName
+                                                                    // Renders the interface using the current data and interaction state.
                                                                     return (
                                                                         <>
                                                                             <button
@@ -1895,6 +1778,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
                                                                     const isAdded = !!selectedAddFiles.find(f => f.name === name)
                                                                     const isServer = additionalFileNames.includes(name)
 
+                                                                    // Renders the interface using the current data and interaction state.
                                                                     return (
                                                                         <li className="tree-row" role="treeitem" key={entry.key}>
                                                                             <span className="tree-icon" aria-hidden="true">
@@ -2350,7 +2234,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
                                             <button
                                                 type="button"
                                                 className="modal-submit-button"
-                                                onClick={() => buttonhandleClick(selectedTestCaseId!)}
+                                                onClick={() => buttonhandleClick()}
                                                 disabled={submittingTestcase}
                                             >
                                                 {submittingTestcase ? (
@@ -2382,6 +2266,7 @@ const AdminProjectManage = ({ practiceMode = false }: AdminProjectManageProps) =
                     )}
                 </>
             </div>
+            {/* Shows progress while this view is waiting for data. */}
             <LoadingAnimation show={showFullScreenLoader} message={loaderMessage} />
         </div>
     )

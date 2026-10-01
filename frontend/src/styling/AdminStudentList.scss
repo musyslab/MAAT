@@ -490,63 +490,7 @@
     }
 }
 
-.office-hours-indicator {
-    position: relative;
-    display: inline-block;
-    margin-left: 8px;
-    color: #17a2b8;
-    cursor: help;
-    font-size: 1.1em;
-    vertical-align: middle;
 
-    &::after,
-    &::before {
-        position: absolute;
-        opacity: 0;
-        visibility: hidden;
-        transition: all 0.2s ease-in-out;
-        z-index: 1000;
-        pointer-events: none;
-    }
-
-    &::after {
-        content: attr(data-tooltip);
-        bottom: 125%;
-        left: -0.5rem;
-        transform: none;
-        background-color: #333;
-        color: #fff;
-        padding: 6px 10px;
-        border-radius: 4px;
-        white-space: nowrap;
-        font-size: 0.85rem;
-        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-    }
-
-    &::before {
-        content: "";
-        bottom: 115%;
-        left: 50%;
-        transform: translateX(-50%);
-        border-width: 5px;
-        border-style: solid;
-        border-color: #333 transparent transparent transparent;
-    }
-
-    &:hover {
-        &::after {
-            opacity: 1;
-            visibility: visible;
-            bottom: 135%;
-        }
-
-        &::before {
-            opacity: 1;
-            visibility: visible;
-            bottom: 125%;
-        }
-    }
-}
 
 .testcase-modal {
     .results-table {
